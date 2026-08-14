@@ -9,28 +9,27 @@ from .base import BaseResolver, ResolvedURL
 class SourceForgeResolver(BaseResolver):
     """Resolver for SourceForge file and mirror download links."""
 
-    SF_DOMAINS = ["sourceforge.net", "sf.net", "downloads.sourceforge.net"]
+    SF_DOMAINS = ["sourceforge.net", "sf.net", "downloads.sourceforge.net", "master.dl.sourceforge.net"]
 
     def can_handle(self, url: str) -> bool:
         parsed = urlparse(url)
         return any(domain in parsed.netloc for domain in self.SF_DOMAINS)
 
     def resolve(self, url: str) -> ResolvedURL:
-        # Ensure mirror query parameter if not present
-        target_url = url
-        if "use_mirror" not in target_url and "sourceforge.net" in target_url:
-            delimiter = "&" if "?" in target_url else "?"
-            target_url += f"{delimiter}use_mirror=autoselect"
+        clean_url = url
+        if "sourceforge.net/projects" in clean_url and not clean_url.endswith("/download") and "?download" not in clean_url:
+            clean_url = clean_url.rstrip("/") + "/download"
 
+        session = requests.Session()
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            "User-Agent": "Wget/1.21.3",
+            "Accept": "*/*",
+            "Connection": "Keep-Alive"
         }
 
-        # Follow redirects to get final direct mirror URL
-        res = requests.head(target_url, headers=headers, allow_redirects=True, timeout=15)
-        if res.status_code >= 400 or "Content-Type" in res.headers and "text/html" in res.headers.get("Content-Type", ""):
-            # Fallback to GET stream if HEAD is blocked or returns HTML redirect page
-            res = requests.get(target_url, headers=headers, allow_redirects=True, stream=True, timeout=15)
+        # Follow redirects with CLI UA to receive signed mirror URL
+        res = session.get(clean_url, headers=headers, allow_redirects=True, stream=True, timeout=25)
+        res.raise_for_status()
 
         final_url = res.url
         filename = None
@@ -42,7 +41,7 @@ class SourceForgeResolver(BaseResolver):
 
         if not filename:
             path_parts = [p for p in urlparse(final_url).path.split("/") if p and p != "download"]
-            filename = path_parts[-1] if path_parts else "sourceforge_file.bin"
+            filename = path_parts[-1] if path_parts else "sourceforge_file.zip"
 
         file_size = None
         if "Content-Length" in res.headers:
@@ -59,6 +58,6 @@ class SourceForgeResolver(BaseResolver):
             filename=filename,
             file_size=file_size,
             headers=headers,
-            cookies=res.cookies.get_dict(),
+            cookies=session.cookies.get_dict(),
             supports_ranges=supports_ranges
         )
