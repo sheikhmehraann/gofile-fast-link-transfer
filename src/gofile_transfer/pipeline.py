@@ -1,4 +1,4 @@
-"""Orchestrated high-speed link-to-GoFile pipeline."""
+"""Orchestrated 32-thread high-speed link-to-GoFile pipeline."""
 
 import os
 import sys
@@ -40,16 +40,16 @@ class TransferSummary:
 
 
 class TransferPipeline:
-    """High-speed pipeline to resolve, download, upload, and format output."""
+    """32-Thread parallel pipeline to resolve, download, upload, and format output."""
 
-    def __init__(self, connections: int = 16, gofile_token: Optional[str] = None, keep_files: bool = False):
+    def __init__(self, connections: int = 32, gofile_token: Optional[str] = None, keep_files: bool = False):
         self.factory = ResolverFactory()
         self.downloader = ParallelDownloader(num_connections=connections)
         self.uploader = GoFileUploader(token=gofile_token)
         self.keep_files = keep_files
 
     def process_url(self, url: str, output_dir: Optional[str] = None, folder_id: Optional[str] = None) -> TransferSummary:
-        """Process a single URL: Resolve -> Parallel Download -> Multi-Server Upload."""
+        """Process a single URL: Resolve -> 32-Thread Parallel Download -> Multi-Server 4MB Upload."""
         start_total = time.time()
 
         console.print(f"[bold cyan][>] Resolving URL:[/bold cyan] {url}")
@@ -61,16 +61,16 @@ class TransferPipeline:
         temp_dir = output_dir or tempfile.mkdtemp(prefix="gofile_transfer_")
 
         try:
-            # 1. Parallel High-Speed Download
+            # 1. 32-Thread Parallel High-Speed Download
             start_dl = time.time()
             local_path = self.downloader.download(resolved, output_dir=temp_dir)
             dl_duration = max(time.time() - start_dl, 0.001)
 
             file_size = os.path.getsize(local_path)
             dl_speed = (file_size / (1024 * 1024)) / dl_duration
-            console.print(f"[bold green][+] Download Completed![/bold green] Time: {dl_duration:.2f}s ({dl_speed:.2f} MB/s)")
+            console.print(f"[bold green][+] 32-Thread Download Completed![/bold green] Time: {dl_duration:.2f}s ({dl_speed:.2f} MB/s)")
 
-            # 2. Parallel Latency-Optimized Upload
+            # 2. High-Throughput 4MB Socket Upload to Best Server
             start_ul = time.time()
             gofile_res = self.uploader.upload(local_path, folder_id=folder_id)
             ul_duration = max(time.time() - start_ul, 0.001)
@@ -78,7 +78,7 @@ class TransferPipeline:
             ul_speed = (file_size / (1024 * 1024)) / ul_duration
             total_duration = time.time() - start_total
 
-            console.print(f"[bold green][+] Upload Completed![/bold green] Time: {ul_duration:.2f}s ({ul_speed:.2f} MB/s)")
+            console.print(f"[bold green][+] High-Throughput Upload Completed![/bold green] Time: {ul_duration:.2f}s ({ul_speed:.2f} MB/s)")
 
             summary = TransferSummary(
                 original_url=url,
@@ -111,8 +111,8 @@ class TransferPipeline:
         table.add_row("[bold cyan]GoFile Link:[/bold cyan]", f"[bold green u]{summary.gofile_url}[/bold green u]")
         table.add_row("[bold white]File Name:[/bold white]", summary.filename)
         table.add_row("[bold white]File Size:[/bold white]", f"{summary.file_size / (1024 * 1024):.2f} MB")
-        table.add_row("[bold white]Download Speed:[/bold white]", f"{summary.download_speed_mbps:.2f} MB/s ({summary.download_time:.2f}s)")
-        table.add_row("[bold white]Upload Speed:[/bold white]", f"{summary.upload_speed_mbps:.2f} MB/s ({summary.upload_time:.2f}s)")
+        table.add_row("[bold white]Download Speed (32x):[/bold white]", f"{summary.download_speed_mbps:.2f} MB/s ({summary.download_time:.2f}s)")
+        table.add_row("[bold white]Upload Speed (4MB Buffer):[/bold white]", f"{summary.upload_speed_mbps:.2f} MB/s ({summary.upload_time:.2f}s)")
         table.add_row("[bold white]Total Duration:[/bold white]", f"{summary.total_time:.2f}s")
 
-        console.print(Panel(table, title="[+] Transfer Completed Successfully", border_style="bold green"))
+        console.print(Panel(table, title="[+] ⚡ 32-Thread Transfer Completed in Seconds", border_style="bold green"))

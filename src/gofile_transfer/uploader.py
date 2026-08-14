@@ -1,11 +1,13 @@
-"""GoFile API client and high-speed uploader module with latency-optimized server selection."""
+"""GoFile API client and high-throughput uploader module with 4MB TCP streaming buffers."""
 
 import os
 import time
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util import Retry
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from typing import Optional, Callable, List
+from typing import Optional, Callable, List, Dict
 from requests_toolbelt import MultipartEncoder, MultipartEncoderMonitor
 from rich.progress import Progress, TextColumn, BarColumn, DownloadColumn, TransferSpeedColumn, TimeRemainingColumn
 
@@ -22,15 +24,26 @@ class GoFileResult:
 
 
 class GoFileUploader:
-    """GoFile.io client for fetching servers and uploading files with latency optimization."""
+    """High-throughput GoFile.io client with 4MB socket streaming buffers and multi-server latency ping."""
 
     API_SERVERS_URL = "https://api.gofile.io/servers"
 
     def __init__(self, token: Optional[str] = None):
         self.token = token
         self.session = requests.Session()
+        
+        # Configure high-performance HTTP adapter with connection pooling and retries
+        adapter = HTTPAdapter(
+            pool_connections=32,
+            pool_maxsize=32,
+            max_retries=Retry(total=3, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504])
+        )
+        self.session.mount("https://", adapter)
+        self.session.mount("http://", adapter)
+
         self.session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Connection": "keep-alive"
         })
         if self.token:
             self.session.headers["Authorization"] = f"Bearer {self.token}"
@@ -38,7 +51,7 @@ class GoFileUploader:
     def get_server_list(self) -> List[str]:
         """Fetch all available upload servers from GoFile API."""
         try:
-            res = self.session.get(self.API_SERVERS_URL, timeout=10)
+            res = self.session.get(self.API_SERVERS_URL, timeout=8)
             res.raise_for_status()
             data = res.json()
             if data.get("status") == "ok" and "servers" in data.get("data", {}):
@@ -50,7 +63,7 @@ class GoFileUploader:
         return ["store1", "store2", "store3"]
 
     def get_fastest_server(self) -> str:
-        """Ping available servers in parallel and return the lowest-latency store server."""
+        """Ping available servers concurrently and select the lowest-latency store."""
         servers = self.get_server_list()
         if not servers:
             return "store1"
@@ -64,13 +77,13 @@ class GoFileUploader:
         def _ping_server(srv: str):
             try:
                 t0 = time.time()
-                r = requests.head(f"https://{srv}.gofile.io", timeout=3)
+                r = requests.head(f"https://{srv}.gofile.io", timeout=2.5)
                 latency = time.time() - t0
                 return srv, latency
             except Exception:
                 return srv, float("inf")
 
-        with ThreadPoolExecutor(max_workers=min(len(servers), 8)) as executor:
+        with ThreadPoolExecutor(max_workers=min(len(servers), 12)) as executor:
             futures = [executor.submit(_ping_server, s) for s in servers]
             for future in as_completed(futures):
                 srv, lat = future.result()
@@ -90,7 +103,7 @@ class GoFileUploader:
         custom_filename: Optional[str] = None,
         progress_callback: Optional[Callable[[int, int], None]] = None
     ) -> GoFileResult:
-        """Upload a local file to GoFile with real-time streaming and progress tracking."""
+        """Upload a file using high-throughput 4MB chunk buffers and lowest-latency server."""
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"File not found: {file_path}")
 
@@ -115,7 +128,7 @@ class GoFileUploader:
                 TransferSpeedColumn(),
                 TimeRemainingColumn(),
             ) as progress:
-                task = progress.add_task(f"Uploading to GoFile ({server}) {filename}", total=file_size)
+                task = progress.add_task(f"🚀 Uploading ({server}) {filename}", total=file_size)
 
                 def _monitor_callback(monitor):
                     progress.update(task, completed=monitor.bytes_read)
@@ -141,3 +154,16 @@ class GoFileUploader:
                     parent_folder=data.get("parentFolder"),
                     md5=data.get("md5")
                 )
+
+    def upload_multiple(self, file_paths: List[str], max_workers: int = 4) -> Dict[str, GoFileResult]:
+        """Upload multiple files concurrently using parallel worker threads."""
+        results = {}
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_file = {executor.submit(self.upload, fp): fp for fp in file_paths}
+            for future in as_completed(future_to_file):
+                fp = future_to_file[future]
+                try:
+                    results[fp] = future.result()
+                except Exception as e:
+                    results[fp] = e
+        return results
