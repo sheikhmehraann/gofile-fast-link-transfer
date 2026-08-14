@@ -1,14 +1,16 @@
-"""Google Drive link resolver with smart confirmation form parsing and token resolution."""
+"""Google Drive link resolver with quota and error detection."""
 
 import re
+import os
 import requests
+import gdown
 from urllib.parse import parse_qs, urlparse, urljoin
 from typing import Optional
 from .base import BaseResolver, ResolvedURL
 
 
 class GoogleDriveResolver(BaseResolver):
-    """Resolver for Google Drive sharing, folder, and export links."""
+    """Resolver for Google Drive links with quota-limit detection and token confirmation."""
 
     GDRIVE_DOMAINS = ["drive.google.com", "docs.google.com", "drive.usercontent.google.com"]
 
@@ -47,13 +49,26 @@ class GoogleDriveResolver(BaseResolver):
         res = session.get(initial_url, stream=True)
 
         final_res = res
-
-        # Check if Google returned an HTML page (e.g., Virus scan warning / Download anyway form)
         content_type = res.headers.get("Content-Type", "")
+
         if "text/html" in content_type:
             html_text = res.text
 
-            # 1. Search for HTML form action and inputs (Google Drive Download anyway form)
+            # Check for Google Drive Quota / Rate Limit errors
+            if "Too many users have viewed or downloaded this file recently" in html_text or "Quota exceeded" in html_text:
+                raise RuntimeError(
+                    "Google Drive download quota exceeded for this file. "
+                    "Google has temporarily locked public downloads due to high traffic (24h limit). "
+                    "Please try another link or make a copy in your Google Drive."
+                )
+
+            if "Access denied" in html_text or "You need access" in html_text or "accounts.google.com" in res.url:
+                raise PermissionError(
+                    "Google Drive access denied: This file is private or requires Google Account authorization. "
+                    "Ensure link sharing is set to 'Anyone with the link'."
+                )
+
+            # Check for Google Drive "Download anyway" confirmation form
             form_match = re.search(r'<form[^>]*action="([^"]+)"[^>]*>(.*?)</form>', html_text, re.DOTALL | re.IGNORECASE)
             if form_match:
                 action_url = form_match.group(1)
@@ -62,14 +77,20 @@ class GoogleDriveResolver(BaseResolver):
 
                 form_content = form_match.group(2)
                 inputs = re.findall(r'name="([^"]+)"\s+value="([^"]+)"', form_content)
-
                 form_params = {k: v for k, v in inputs}
                 if "id" not in form_params:
                     form_params["id"] = file_id
 
                 final_res = session.get(action_url, params=form_params, stream=True)
+
+                # Re-verify that the response is actually a binary stream and not an HTML error
+                if "text/html" in final_res.headers.get("Content-Type", ""):
+                    if "Too many users" in final_res.text or "Quota exceeded" in final_res.text:
+                        raise RuntimeError(
+                            "Google Drive download quota exceeded for this file (24h limit)."
+                        )
             else:
-                # 2. Check for confirm token in cookies or links
+                # Check for confirm token in cookies or text
                 confirm_token = None
                 for key, val in session.cookies.items():
                     if key.startswith("download_warning"):
@@ -82,9 +103,20 @@ class GoogleDriveResolver(BaseResolver):
                         confirm_token = token_match.group(1)
 
                 if confirm_token:
-                    final_res = session.get("https://drive.google.com/uc?export=download", params={"id": file_id, "confirm": confirm_token}, stream=True)
+                    final_res = session.get(
+                        "https://drive.google.com/uc?export=download",
+                        params={"id": file_id, "confirm": confirm_token},
+                        stream=True
+                    )
 
-        # Extract filename from Content-Disposition header
+        # Final validation: Ensure we do NOT treat small HTML error responses as files
+        final_ct = final_res.headers.get("Content-Type", "")
+        if "text/html" in final_ct and "Content-Disposition" not in final_res.headers:
+            raise RuntimeError(
+                "Google Drive failed to serve file stream. "
+                "The file may be quota-locked, private, or deleted."
+            )
+
         filename = None
         cd = final_res.headers.get("Content-Disposition", "")
         if cd:
