@@ -15,6 +15,7 @@ class ResolvedURL:
     cookies: Dict[str, str] = field(default_factory=dict)
     supports_ranges: bool = True
     mirror_urls: List[str] = field(default_factory=list)
+    original_url: Optional[str] = None
 
 
 class BaseResolver(ABC):
