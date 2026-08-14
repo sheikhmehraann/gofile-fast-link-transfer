@@ -1,4 +1,4 @@
-"""GoFile API client and ultra-high-throughput uploader module with geo-localized low-latency routing and 16MB TCP socket buffers."""
+"""GoFile API client and ultra-high-throughput uploader module with multi-server automatic fallback and 16MB TCP socket buffers."""
 
 import os
 import time
@@ -27,7 +27,7 @@ class GoFileResult:
 
 
 class GoFileUploader:
-    """High-throughput GoFile.io client with geo-localized lowest-latency routing and native libcurl acceleration."""
+    """High-throughput GoFile.io client with multi-server automatic failover and native libcurl acceleration."""
 
     API_SERVERS_URL = "https://api.gofile.io/servers"
 
@@ -63,19 +63,18 @@ class GoFileUploader:
                     return servers
         except Exception:
             pass
-        return ["store1", "store2", "store3", "store-na-phx-1", "store-eu-par-1"]
+        return ["store1", "store2", "store-na-phx-1", "store-eu-par-1", "store3"]
 
-    def get_fastest_server(self) -> str:
-        """Ping available servers in parallel with 1.5s timeout and select the lowest-latency store server."""
+    def get_ranked_servers(self) -> List[str]:
+        """Ping available servers in parallel and return them sorted from lowest to highest latency."""
         servers = self.get_server_list()
         if not servers:
-            return "store1"
+            return ["store1", "store2"]
 
         if len(servers) == 1:
-            return servers[0]
+            return servers
 
-        best_server = servers[0]
-        best_latency = float("inf")
+        results = []
 
         def _ping_server(srv: str):
             try:
@@ -90,11 +89,14 @@ class GoFileUploader:
             futures = [executor.submit(_ping_server, s) for s in servers]
             for future in as_completed(futures):
                 srv, lat = future.result()
-                if lat < best_latency:
-                    best_latency = lat
-                    best_server = srv
+                results.append((srv, lat))
 
-        return best_server
+        results.sort(key=lambda x: x[1])
+        return [srv for srv, lat in results if lat < float("inf")] or servers
+
+    def get_fastest_server(self) -> str:
+        ranked = self.get_ranked_servers()
+        return ranked[0] if ranked else "store1"
 
     def get_best_server(self) -> str:
         return self.get_fastest_server()
@@ -106,24 +108,33 @@ class GoFileUploader:
         custom_filename: Optional[str] = None,
         progress_callback: Optional[Callable[[int, int], None]] = None
     ) -> GoFileResult:
-        """Upload a file using native libcurl turbo acceleration or Python session fallback."""
+        """Upload a file with multi-server automatic fallback if a server fails."""
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"File not found: {file_path}")
 
-        server = self.get_fastest_server()
+        ranked_servers = self.get_ranked_servers()
         filename = custom_filename or os.path.basename(file_path)
+        last_error = None
 
-        # 1. Try native C-level curl upload (Fastest HTTP/2 16MB socket streaming)
-        if self.has_curl:
+        for server in ranked_servers[:3]:
+            # 1. Try native C-level curl upload (Fastest HTTP/2 16MB socket streaming)
+            if self.has_curl:
+                try:
+                    result = self._upload_curl(file_path, server, folder_id, filename)
+                    if result:
+                        return result
+                except Exception as e:
+                    last_error = e
+
+            # 2. Python streaming upload fallback
             try:
-                result = self._upload_curl(file_path, server, folder_id, filename)
+                result = self._upload_python(file_path, server, folder_id, filename, progress_callback)
                 if result:
                     return result
-            except Exception:
-                pass
+            except Exception as e:
+                last_error = e
 
-        # 2. Python streaming upload fallback
-        return self._upload_python(file_path, server, folder_id, filename, progress_callback)
+        raise RuntimeError(f"GoFile upload failed on all tested servers. Last error: {last_error}")
 
     def _upload_curl(self, file_path: str, server: str, folder_id: Optional[str], filename: str) -> Optional[GoFileResult]:
         """Upload via native libcurl C engine with 16MB socket buffer, Expect: suppression, and TCP_NODELAY."""
