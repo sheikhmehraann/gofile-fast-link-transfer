@@ -1,4 +1,4 @@
-"""Orchestrated link-to-GoFile pipeline with Zero-Disk Direct Streaming Pipe support."""
+"""Orchestrated high-speed link-to-GoFile pipeline."""
 
 import os
 import sys
@@ -13,7 +13,6 @@ from rich.table import Table
 from .resolvers import ResolverFactory, ResolvedURL
 from .downloader import ParallelDownloader
 from .uploader import GoFileUploader, GoFileResult
-from .streamer import DirectStreamPipe
 
 if sys.platform == "win32":
     try:
@@ -38,22 +37,19 @@ class TransferSummary:
     total_time: float
     download_speed_mbps: float
     upload_speed_mbps: float
-    mode: str = "Live Stream Pipe"
 
 
 class TransferPipeline:
-    """End-to-end pipeline with Zero-Disk Stream Pipe for fastest possible throughput."""
+    """High-speed pipeline to resolve, download, upload, and format output."""
 
-    def __init__(self, connections: int = 16, gofile_token: Optional[str] = None, keep_files: bool = False, use_stream_pipe: bool = True):
+    def __init__(self, connections: int = 16, gofile_token: Optional[str] = None, keep_files: bool = False):
         self.factory = ResolverFactory()
         self.downloader = ParallelDownloader(num_connections=connections)
         self.uploader = GoFileUploader(token=gofile_token)
-        self.streamer = DirectStreamPipe(uploader=self.uploader)
         self.keep_files = keep_files
-        self.use_stream_pipe = use_stream_pipe
 
     def process_url(self, url: str, output_dir: Optional[str] = None, folder_id: Optional[str] = None) -> TransferSummary:
-        """Process URL via Zero-Disk Stream Pipe or Multi-Threaded Parallel buffer."""
+        """Process a single URL: Resolve -> Parallel Download -> Multi-Server Upload."""
         start_total = time.time()
 
         console.print(f"[bold cyan][>] Resolving URL:[/bold cyan] {url}")
@@ -62,39 +58,10 @@ class TransferPipeline:
         console.print(f"[bold green][+] Link Resolved![/bold green] Direct URL: {resolved.direct_url[:80]}...")
         console.print(f"[bold white]File Name:[/bold white] {resolved.filename} | [bold white]Size:[/bold white] {f'{resolved.file_size / (1024*1024):.2f} MB' if resolved.file_size else 'Unknown'}")
 
-        # Method 1: Zero-Disk Concurrent Streaming Pipe (Fastest Mode)
-        if self.use_stream_pipe and not self.keep_files and not output_dir and resolved.file_size:
-            try:
-                console.print("[bold magenta]🚀 Mode: Zero-Disk Concurrent Stream Pipe (Simultaneous Download + Upload)[/bold magenta]")
-                start_stream = time.time()
-                gofile_res = self.streamer.transfer_stream(resolved, folder_id=folder_id)
-                stream_duration = max(time.time() - start_stream, 0.001)
-
-                file_size = resolved.file_size or 0
-                avg_speed = (file_size / (1024 * 1024)) / stream_duration
-                total_duration = time.time() - start_total
-
-                summary = TransferSummary(
-                    original_url=url,
-                    filename=gofile_res.file_name,
-                    file_size=file_size,
-                    gofile_url=gofile_res.download_page,
-                    gofile_code=gofile_res.code,
-                    download_time=stream_duration,
-                    upload_time=stream_duration,
-                    total_time=total_duration,
-                    download_speed_mbps=avg_speed,
-                    upload_speed_mbps=avg_speed,
-                    mode="Zero-Disk Stream Pipe (Live)"
-                )
-                self.print_summary_panel(summary)
-                return summary
-            except Exception as e:
-                console.print(f"[yellow][!] Stream pipe notice ({e}). Falling back to multi-connection parallel engine...[/yellow]")
-
-        # Method 2: Multi-Connection Parallel Range Buffer (Fallback / Keep-Files Mode)
         temp_dir = output_dir or tempfile.mkdtemp(prefix="gofile_transfer_")
+
         try:
+            # 1. Parallel High-Speed Download
             start_dl = time.time()
             local_path = self.downloader.download(resolved, output_dir=temp_dir)
             dl_duration = max(time.time() - start_dl, 0.001)
@@ -103,9 +70,11 @@ class TransferPipeline:
             dl_speed = (file_size / (1024 * 1024)) / dl_duration
             console.print(f"[bold green][+] Download Completed![/bold green] Time: {dl_duration:.2f}s ({dl_speed:.2f} MB/s)")
 
+            # 2. Parallel Latency-Optimized Upload
             start_ul = time.time()
             gofile_res = self.uploader.upload(local_path, folder_id=folder_id)
             ul_duration = max(time.time() - start_ul, 0.001)
+
             ul_speed = (file_size / (1024 * 1024)) / ul_duration
             total_duration = time.time() - start_total
 
@@ -121,11 +90,12 @@ class TransferPipeline:
                 upload_time=ul_duration,
                 total_time=total_duration,
                 download_speed_mbps=dl_speed,
-                upload_speed_mbps=ul_speed,
-                mode="16-Thread Parallel Buffer"
+                upload_speed_mbps=ul_speed
             )
+
             self.print_summary_panel(summary)
             return summary
+
         finally:
             if not self.keep_files and temp_dir and os.path.exists(temp_dir) and not output_dir:
                 try:
@@ -141,8 +111,8 @@ class TransferPipeline:
         table.add_row("[bold cyan]GoFile Link:[/bold cyan]", f"[bold green u]{summary.gofile_url}[/bold green u]")
         table.add_row("[bold white]File Name:[/bold white]", summary.filename)
         table.add_row("[bold white]File Size:[/bold white]", f"{summary.file_size / (1024 * 1024):.2f} MB")
-        table.add_row("[bold white]Transfer Mode:[/bold white]", f"[magenta]{summary.mode}[/magenta]")
-        table.add_row("[bold white]Transfer Speed:[/bold white]", f"{summary.upload_speed_mbps:.2f} MB/s")
+        table.add_row("[bold white]Download Speed:[/bold white]", f"{summary.download_speed_mbps:.2f} MB/s ({summary.download_time:.2f}s)")
+        table.add_row("[bold white]Upload Speed:[/bold white]", f"{summary.upload_speed_mbps:.2f} MB/s ({summary.upload_time:.2f}s)")
         table.add_row("[bold white]Total Duration:[/bold white]", f"{summary.total_time:.2f}s")
 
         console.print(Panel(table, title="[+] Transfer Completed Successfully", border_style="bold green"))

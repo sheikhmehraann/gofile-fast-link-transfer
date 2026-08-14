@@ -1,7 +1,9 @@
-"""Ultra-fast parallel multi-threaded HTTP downloader with range requests and retry logic."""
+"""Ultra-fast parallel multi-threaded HTTP downloader with aria2c acceleration."""
 
 import os
 import time
+import shutil
+import subprocess
 import httpx
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional, Callable
@@ -10,12 +12,13 @@ from .resolvers import ResolvedURL
 
 
 class ParallelDownloader:
-    """High-speed multi-threaded downloader with range support and resume capability."""
+    """High-speed multi-threaded downloader with aria2c native acceleration and Python fallback."""
 
-    def __init__(self, num_connections: int = 16, chunk_size: int = 256 * 1024, max_retries: int = 3):
+    def __init__(self, num_connections: int = 16, chunk_size: int = 512 * 1024, max_retries: int = 3):
         self.num_connections = num_connections
         self.chunk_size = chunk_size
         self.max_retries = max_retries
+        self.has_aria2 = shutil.which("aria2c") is not None
 
     def download(
         self,
@@ -24,13 +27,23 @@ class ParallelDownloader:
         custom_filename: Optional[str] = None,
         progress_callback: Optional[Callable[[int, int], None]] = None
     ) -> str:
-        """Download resolved URL to local disk."""
+        """Download resolved URL to local disk using the fastest available engine."""
         filename = custom_filename or resolved.filename or "downloaded_file.bin"
         output_path = os.path.abspath(os.path.join(output_dir, filename))
         os.makedirs(output_dir, exist_ok=True)
 
+        # 1. Try aria2c if available (Fastest C++ epoll engine)
+        if self.has_aria2 and not resolved.cookies:
+            try:
+                success = self._download_aria2(resolved.direct_url, output_dir, filename)
+                if success and os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                    return output_path
+            except Exception:
+                pass
+
+        # 2. Multi-threaded range request engine (Python)
         file_size = resolved.file_size
-        supports_ranges = resolved.supports_ranges and file_size and file_size > (5 * 1024 * 1024)
+        supports_ranges = resolved.supports_ranges and file_size and file_size > (2 * 1024 * 1024)
 
         if supports_ranges and self.num_connections > 1:
             self._download_parallel(resolved, output_path, file_size, progress_callback)
@@ -39,10 +52,27 @@ class ParallelDownloader:
 
         return output_path
 
+    def _download_aria2(self, direct_url: str, output_dir: str, filename: str) -> bool:
+        """Download via native aria2c multi-connection C++ engine."""
+        cmd = [
+            "aria2c",
+            f"--max-connection-per-server={self.num_connections}",
+            f"--split={self.num_connections}",
+            "--min-split-size=1M",
+            "--file-allocation=none",
+            "--summary-interval=1",
+            "--console-log-level=warn",
+            "--dir", output_dir,
+            "--out", filename,
+            direct_url
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        return res.returncode == 0
+
     def _download_single(self, resolved: ResolvedURL, output_path: str, progress_callback: Optional[Callable[[int, int], None]] = None):
-        """Single-stream download fallback."""
+        """Single-stream download with 512KB buffer."""
         headers = resolved.headers.copy()
-        headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        headers["User-Agent"] = "Wget/1.21.3"
 
         with httpx.Client(follow_redirects=True, timeout=60.0, cookies=resolved.cookies) as client:
             with client.stream("GET", resolved.direct_url, headers=headers) as response:
@@ -67,7 +97,7 @@ class ParallelDownloader:
                                 progress_callback(downloaded, total_size)
 
     def _download_parallel(self, resolved: ResolvedURL, output_path: str, file_size: int, progress_callback: Optional[Callable[[int, int], None]] = None):
-        """Multi-threaded range request download."""
+        """Multi-threaded range request download with 16 connections."""
         part_size = file_size // self.num_connections
         ranges = []
         for i in range(self.num_connections):
@@ -87,13 +117,13 @@ class ParallelDownloader:
             TransferSpeedColumn(),
             TimeRemainingColumn(),
         ) as progress:
-            task = progress.add_task(f"Fast Download ({self.num_connections} threads) {os.path.basename(output_path)}", total=file_size)
+            task = progress.add_task(f"⚡ Fast Parallel Download ({self.num_connections}x) {os.path.basename(output_path)}", total=file_size)
 
             def _download_chunk(start: int, end: int, part_id: int):
                 nonlocal downloaded_bytes
                 range_headers = resolved.headers.copy()
                 range_headers["Range"] = f"bytes={start}-{end}"
-                range_headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                range_headers["User-Agent"] = "Wget/1.21.3"
 
                 for attempt in range(self.max_retries):
                     try:
@@ -116,7 +146,7 @@ class ParallelDownloader:
                     except Exception as e:
                         if attempt == self.max_retries - 1:
                             raise RuntimeError(f"Chunk {part_id} failed after {self.max_retries} retries: {e}")
-                        time.sleep(1)
+                        time.sleep(0.5)
 
             with ThreadPoolExecutor(max_workers=self.num_connections) as executor:
                 futures = [executor.submit(_download_chunk, start, end, part_id) for start, end, part_id in ranges]
