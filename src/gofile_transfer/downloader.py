@@ -1,4 +1,4 @@
-"""Ultra-fast parallel HTTP downloader with aria2c multi-connection acceleration and RAM disk buffering."""
+"""Ultra-fast parallel HTTP downloader with aria2c multi-connection acceleration."""
 
 import os
 import sys
@@ -7,27 +7,19 @@ import shutil
 import subprocess
 import httpx
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Optional, Callable, List
+from typing import Optional, Callable
 from rich.progress import Progress, TextColumn, BarColumn, DownloadColumn, TransferSpeedColumn, TimeRemainingColumn
 from .resolvers import ResolvedURL
 
 
 class ParallelDownloader:
-    """High-speed parallel downloader with native aria2c acceleration and RAM disk optimization."""
+    """High-speed parallel downloader with native aria2c acceleration on high-capacity NVMe storage."""
 
     def __init__(self, num_connections: int = 16, chunk_size: int = 2 * 1024 * 1024, max_retries: int = 3):
         self.num_connections = num_connections
         self.chunk_size = chunk_size
         self.max_retries = max_retries
         self.has_aria2 = shutil.which("aria2c") is not None
-
-    def get_optimal_directory(self, requested_dir: Optional[str] = None) -> str:
-        """Use Linux RAM disk /dev/shm if available for zero disk latency."""
-        if requested_dir and requested_dir != ".":
-            return requested_dir
-        if sys.platform.startswith("linux") and os.path.exists("/dev/shm") and os.access("/dev/shm", os.W_OK):
-            return "/dev/shm"
-        return requested_dir or "."
 
     def download(
         self,
@@ -38,14 +30,13 @@ class ParallelDownloader:
     ) -> str:
         """Download resolved URL using optimal 16-connection aria2c engine."""
         filename = custom_filename or resolved.filename or "downloaded_file.bin"
-        target_dir = self.get_optimal_directory(output_dir)
-        output_path = os.path.abspath(os.path.join(target_dir, filename))
-        os.makedirs(target_dir, exist_ok=True)
+        output_path = os.path.abspath(os.path.join(output_dir, filename))
+        os.makedirs(output_dir, exist_ok=True)
 
-        # 1. Try aria2c with researched optimal parameters
+        # 1. Try aria2c with researched optimal parameters on NVMe storage
         if self.has_aria2 and not resolved.cookies:
             try:
-                success = self._download_aria2(resolved.direct_url, target_dir, filename)
+                success = self._download_aria2(resolved.direct_url, output_dir, filename)
                 if success and os.path.exists(output_path) and os.path.getsize(output_path) > 0:
                     return output_path
             except Exception:
@@ -63,7 +54,7 @@ class ParallelDownloader:
         return output_path
 
     def _download_aria2(self, direct_url: str, output_dir: str, filename: str) -> bool:
-        """Download via native aria2c with researched optimal production flags."""
+        """Download via native aria2c with posix_fallocate and 16 parallel connections."""
         alloc_mode = "falloc" if sys.platform.startswith("linux") else "none"
         cmd = [
             "aria2c",
@@ -72,8 +63,7 @@ class ParallelDownloader:
             "--min-split-size=1M",
             "--piece-length=1M",
             f"--file-allocation={alloc_mode}",
-            "--disk-cache=128M",
-            "--enable-mmap=true",
+            "--disk-cache=64M",
             '--user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"',
             "--allow-overwrite=true",
             "--auto-file-renaming=false",
