@@ -1,7 +1,10 @@
-"""GoFile API client and high-throughput uploader module with 4MB TCP streaming buffers."""
+"""GoFile API client and high-throughput uploader module with native curl acceleration."""
 
 import os
 import time
+import json
+import shutil
+import subprocess
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
@@ -24,15 +27,15 @@ class GoFileResult:
 
 
 class GoFileUploader:
-    """High-throughput GoFile.io client with 4MB socket streaming buffers and multi-server latency ping."""
+    """High-throughput GoFile.io client with native curl acceleration and Python fallback."""
 
     API_SERVERS_URL = "https://api.gofile.io/servers"
 
     def __init__(self, token: Optional[str] = None):
         self.token = token
+        self.has_curl = shutil.which("curl.exe") is not None or shutil.which("curl") is not None
         self.session = requests.Session()
         
-        # Configure high-performance HTTP adapter with connection pooling and retries
         adapter = HTTPAdapter(
             pool_connections=32,
             pool_maxsize=32,
@@ -103,15 +106,68 @@ class GoFileUploader:
         custom_filename: Optional[str] = None,
         progress_callback: Optional[Callable[[int, int], None]] = None
     ) -> GoFileResult:
-        """Upload a file using high-throughput 4MB chunk buffers and lowest-latency server."""
+        """Upload a file using native curl turbo acceleration or Python session fallback."""
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"File not found: {file_path}")
 
         server = self.get_fastest_server()
-        file_size = os.path.getsize(file_path)
         filename = custom_filename or os.path.basename(file_path)
 
+        # 1. Try native C-level curl upload (Fastest HTTP/2 socket streaming)
+        if self.has_curl:
+            try:
+                result = self._upload_curl(file_path, server, folder_id, filename)
+                if result:
+                    return result
+            except Exception:
+                pass
+
+        # 2. Python streaming upload fallback
+        return self._upload_python(file_path, server, folder_id, filename, progress_callback)
+
+    def _upload_curl(self, file_path: str, server: str, folder_id: Optional[str], filename: str) -> Optional[GoFileResult]:
+        """Upload via native libcurl C engine."""
+        curl_bin = "curl.exe" if shutil.which("curl.exe") else "curl"
         upload_url = f"https://{server}.gofile.io/contents/uploadfile"
+
+        cmd = [curl_bin, "-s", "-X", "POST", "-F", f"file=@{file_path};filename={filename}"]
+        if folder_id:
+            cmd.extend(["-F", f"folderId={folder_id}"])
+        if self.token:
+            cmd.extend(["-H", f"Authorization: Bearer {self.token}"])
+
+        cmd.append(upload_url)
+
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+        if res.returncode == 0 and res.stdout:
+            try:
+                data = json.loads(res.stdout)
+                if data.get("status") == "ok":
+                    d = data["data"]
+                    return GoFileResult(
+                        download_page=d.get("downloadPage", f"https://gofile.io/d/{d.get('code', '')}"),
+                        code=d.get("code", ""),
+                        file_id=d.get("id") or d.get("fileId", ""),
+                        file_name=d.get("name") or d.get("fileName", filename),
+                        parent_folder=d.get("parentFolder"),
+                        md5=d.get("md5")
+                    )
+            except Exception:
+                pass
+        return None
+
+    def _upload_python(
+        self,
+        file_path: str,
+        server: str,
+        folder_id: Optional[str],
+        filename: str,
+        progress_callback: Optional[Callable[[int, int], None]] = None
+    ) -> GoFileResult:
+        """Upload using Python multipart encoder with progress bar."""
+        file_size = os.path.getsize(file_path)
+        upload_url = f"https://{server}.gofile.io/contents/uploadfile"
+
         with open(file_path, "rb") as f:
             fields = {"file": (filename, f, "application/octet-stream")}
             if folder_id:
@@ -128,7 +184,7 @@ class GoFileUploader:
                 TransferSpeedColumn(),
                 TimeRemainingColumn(),
             ) as progress:
-                task = progress.add_task(f"🚀 Uploading ({server}) {filename}", total=file_size)
+                task = progress.add_task(f"🚀 Turbo Upload ({server}) {filename}", total=file_size)
 
                 def _monitor_callback(monitor):
                     progress.update(task, completed=monitor.bytes_read)
@@ -154,16 +210,3 @@ class GoFileUploader:
                     parent_folder=data.get("parentFolder"),
                     md5=data.get("md5")
                 )
-
-    def upload_multiple(self, file_paths: List[str], max_workers: int = 4) -> Dict[str, GoFileResult]:
-        """Upload multiple files concurrently using parallel worker threads."""
-        results = {}
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_file = {executor.submit(self.upload, fp): fp for fp in file_paths}
-            for future in as_completed(future_to_file):
-                fp = future_to_file[future]
-                try:
-                    results[fp] = future.result()
-                except Exception as e:
-                    results[fp] = e
-        return results
