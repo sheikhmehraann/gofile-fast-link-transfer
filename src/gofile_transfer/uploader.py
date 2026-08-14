@@ -3,7 +3,7 @@
 import os
 import requests
 from dataclasses import dataclass
-from typing import Optional, Callable
+from typing import Optional, Callable, BinaryIO, Iterable
 from requests_toolbelt import MultipartEncoder, MultipartEncoderMonitor
 from rich.progress import Progress, TextColumn, BarColumn, DownloadColumn, TransferSpeedColumn, TimeRemainingColumn
 
@@ -43,8 +43,7 @@ class GoFileUploader:
                 servers = data["data"]["servers"]
                 if servers:
                     return servers[0]["name"]
-        except Exception as e:
-            # Fallback to default server if API query fails
+        except Exception:
             pass
         return "store1"
 
@@ -91,7 +90,7 @@ class GoFileUploader:
                 monitor = MultipartEncoderMonitor(encoder, _monitor_callback)
                 headers = {"Content-Type": monitor.content_type}
 
-                res = self.session.post(upload_url, data=monitor, headers=headers, timeout=300)
+                res = self.session.post(upload_url, data=monitor, headers=headers, timeout=600)
                 res.raise_for_status()
                 response_data = res.json()
 
