@@ -3,6 +3,7 @@
 import pytest
 from src.gofile_transfer.resolvers.gdrive import GoogleDriveResolver
 from src.gofile_transfer.resolvers.sourceforge import SourceForgeResolver
+from src.gofile_transfer.resolvers.mediafire import MediaFireResolver
 from src.gofile_transfer.resolvers.direct import DirectURLResolver
 from src.gofile_transfer.resolvers.factory import ResolverFactory
 
@@ -23,13 +24,22 @@ def test_gdrive_file_id_extraction():
 def test_gdrive_can_handle():
     resolver = GoogleDriveResolver()
     assert resolver.can_handle("https://drive.google.com/file/d/abc/view") is True
+    assert resolver.can_handle("https://drive.usercontent.google.com/download?id=abc") is True
     assert resolver.can_handle("https://github.com/test/repo") is False
 
 
 def test_sourceforge_can_handle():
     resolver = SourceForgeResolver()
     assert resolver.can_handle("https://sourceforge.net/projects/7-zip/files/7-Zip/23.01/7z2301-x64.exe/download") is True
+    assert resolver.can_handle("https://downloads.sourceforge.net/project/test/file.zip") is True
     assert resolver.can_handle("https://google.com") is False
+
+
+def test_mediafire_can_handle():
+    resolver = MediaFireResolver()
+    assert resolver.can_handle("https://www.mediafire.com/file/abcdef12345/sample.zip/file") is True
+    assert resolver.can_handle("https://mediafire.com/download/abcdef12345") is True
+    assert resolver.can_handle("https://dropbox.com") is False
 
 
 def test_direct_dropbox_conversion():
@@ -41,5 +51,5 @@ def test_direct_dropbox_conversion():
 
 def test_factory_matching():
     factory = ResolverFactory()
-    gdrive_res = factory.resolve  # checking method exists
-    assert callable(gdrive_res)
+    assert len(factory.resolvers) >= 4
+    assert callable(factory.resolve)

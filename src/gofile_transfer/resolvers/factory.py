@@ -4,6 +4,7 @@ from typing import List
 from .base import BaseResolver, ResolvedURL
 from .gdrive import GoogleDriveResolver
 from .sourceforge import SourceForgeResolver
+from .mediafire import MediaFireResolver
 from .direct import DirectURLResolver
 
 
@@ -14,7 +15,8 @@ class ResolverFactory:
         self.resolvers: List[BaseResolver] = [
             GoogleDriveResolver(),
             SourceForgeResolver(),
-            DirectURLResolver(),  # Fallback resolver
+            MediaFireResolver(),
+            DirectURLResolver(),  # Fallback resolver for direct links & Dropbox
         ]
 
     def resolve(self, url: str) -> ResolvedURL:

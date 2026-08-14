@@ -12,12 +12,18 @@ from .resolvers import ResolvedURL
 class ParallelDownloader:
     """High-speed multi-threaded downloader with range support and resume capability."""
 
-    def __init__(self, num_connections: int = 8, chunk_size: int = 128 * 1024, max_retries: int = 3):
+    def __init__(self, num_connections: int = 16, chunk_size: int = 256 * 1024, max_retries: int = 3):
         self.num_connections = num_connections
         self.chunk_size = chunk_size
         self.max_retries = max_retries
 
-    def download(self, resolved: ResolvedURL, output_dir: str = ".", custom_filename: Optional[str] = None, progress_callback: Optional[Callable[[int, int], None]] = None) -> str:
+    def download(
+        self,
+        resolved: ResolvedURL,
+        output_dir: str = ".",
+        custom_filename: Optional[str] = None,
+        progress_callback: Optional[Callable[[int, int], None]] = None
+    ) -> str:
         """Download resolved URL to local disk."""
         filename = custom_filename or resolved.filename or "downloaded_file.bin"
         output_path = os.path.abspath(os.path.join(output_dir, filename))
@@ -36,9 +42,9 @@ class ParallelDownloader:
     def _download_single(self, resolved: ResolvedURL, output_path: str, progress_callback: Optional[Callable[[int, int], None]] = None):
         """Single-stream download fallback."""
         headers = resolved.headers.copy()
-        headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+        headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
-        with httpx.Client(follow_redirects=True, timeout=30.0, cookies=resolved.cookies) as client:
+        with httpx.Client(follow_redirects=True, timeout=60.0, cookies=resolved.cookies) as client:
             with client.stream("GET", resolved.direct_url, headers=headers) as response:
                 response.raise_for_status()
                 total_size = int(response.headers.get("Content-Length", 0)) or resolved.file_size or 0
@@ -69,7 +75,6 @@ class ParallelDownloader:
             end = file_size - 1 if i == self.num_connections - 1 else (start + part_size - 1)
             ranges.append((start, end, i))
 
-        # Pre-allocate output file size
         with open(output_path, "wb") as f:
             f.truncate(file_size)
 
@@ -88,11 +93,11 @@ class ParallelDownloader:
                 nonlocal downloaded_bytes
                 range_headers = resolved.headers.copy()
                 range_headers["Range"] = f"bytes={start}-{end}"
-                range_headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+                range_headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
                 for attempt in range(self.max_retries):
                     try:
-                        with httpx.Client(follow_redirects=True, timeout=30.0, cookies=resolved.cookies) as client:
+                        with httpx.Client(follow_redirects=True, timeout=60.0, cookies=resolved.cookies) as client:
                             with client.stream("GET", resolved.direct_url, headers=range_headers) as response:
                                 response.raise_for_status()
                                 current_pos = start
