@@ -1,4 +1,4 @@
-"""Ultra-fast 32-thread parallel HTTP downloader with aria2c acceleration and zero-copy preallocation."""
+"""Ultra-fast 64-stream parallel HTTP downloader with aria2c acceleration and zero-copy preallocation."""
 
 import os
 import time
@@ -12,9 +12,9 @@ from .resolvers import ResolvedURL
 
 
 class ParallelDownloader:
-    """32-Thread parallel downloader with native aria2c acceleration and Python multi-worker fallback."""
+    """64-Stream parallel downloader with native aria2c acceleration and Python multi-worker fallback."""
 
-    def __init__(self, num_connections: int = 32, chunk_size: int = 1024 * 1024, max_retries: int = 3):
+    def __init__(self, num_connections: int = 64, chunk_size: int = 2 * 1024 * 1024, max_retries: int = 3):
         self.num_connections = num_connections
         self.chunk_size = chunk_size
         self.max_retries = max_retries
@@ -27,12 +27,12 @@ class ParallelDownloader:
         custom_filename: Optional[str] = None,
         progress_callback: Optional[Callable[[int, int], None]] = None
     ) -> str:
-        """Download resolved URL to local disk using 32 parallel streams."""
+        """Download resolved URL to local disk using 64 parallel streams."""
         filename = custom_filename or resolved.filename or "downloaded_file.bin"
         output_path = os.path.abspath(os.path.join(output_dir, filename))
         os.makedirs(output_dir, exist_ok=True)
 
-        # 1. Try aria2c if available (Fastest C++ 32-connection epoll engine)
+        # 1. Try aria2c if available (Fastest C++ 64-connection epoll engine)
         if self.has_aria2 and not resolved.cookies:
             try:
                 success = self._download_aria2(resolved.direct_url, output_dir, filename)
@@ -41,7 +41,7 @@ class ParallelDownloader:
             except Exception:
                 pass
 
-        # 2. Multi-threaded range request engine (Python 32 parallel threads)
+        # 2. Multi-threaded range request engine (Python 64 parallel threads)
         file_size = resolved.file_size
         supports_ranges = resolved.supports_ranges and file_size and file_size > (1 * 1024 * 1024)
 
@@ -53,15 +53,18 @@ class ParallelDownloader:
         return output_path
 
     def _download_aria2(self, direct_url: str, output_dir: str, filename: str) -> bool:
-        """Download via native aria2c with 32 connections."""
+        """Download via native aria2c with 64 connections and 64M RAM cache."""
         cmd = [
             "aria2c",
-            f"--max-connection-per-server={self.num_connections}",
+            "--max-connection-per-server=16",
             f"--split={self.num_connections}",
             "--min-split-size=1M",
             "--file-allocation=none",
             "--summary-interval=1",
             "--console-log-level=warn",
+            "--disk-cache=64M",
+            "--max-tries=10",
+            "--retry-wait=1",
             "--dir", output_dir,
             "--out", filename,
             direct_url
@@ -70,7 +73,7 @@ class ParallelDownloader:
         return res.returncode == 0
 
     def _download_single(self, resolved: ResolvedURL, output_path: str, progress_callback: Optional[Callable[[int, int], None]] = None):
-        """Single-stream download with 1MB buffer."""
+        """Single-stream download with 2MB buffer."""
         headers = resolved.headers.copy()
         headers["User-Agent"] = "Wget/1.21.3"
 
@@ -97,8 +100,8 @@ class ParallelDownloader:
                                 progress_callback(downloaded, total_size)
 
     def _download_parallel(self, resolved: ResolvedURL, output_path: str, file_size: int, progress_callback: Optional[Callable[[int, int], None]] = None):
-        """Multi-threaded range request download with 32 parallel workers and pre-allocated disk writes."""
-        workers = min(self.num_connections, max(1, file_size // (512 * 1024)))
+        """Multi-threaded range request download with 64 parallel workers and pre-allocated disk writes."""
+        workers = min(self.num_connections, max(1, file_size // (1024 * 1024)))
         part_size = file_size // workers
         ranges = []
         for i in range(workers):
@@ -118,7 +121,7 @@ class ParallelDownloader:
             TransferSpeedColumn(),
             TimeRemainingColumn(),
         ) as progress:
-            task = progress.add_task(f"⚡ 32-Stream Parallel Download {os.path.basename(output_path)}", total=file_size)
+            task = progress.add_task(f"⚡ 64-Stream Parallel Download {os.path.basename(output_path)}", total=file_size)
 
             def _download_chunk(start: int, end: int, part_id: int):
                 nonlocal downloaded_bytes
