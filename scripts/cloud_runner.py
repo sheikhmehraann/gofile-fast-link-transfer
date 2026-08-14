@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""GitHub Actions Cloud Runner script for GoFile Fast Link Transfer with Zero-Disk Stream Pipe."""
+"""GitHub Actions Cloud Runner script for GoFile Fast Link Transfer with aria2c + 16x parallel speed."""
 
 import sys
 import os
@@ -19,11 +19,11 @@ def main():
     token = os.environ.get("GOFILE_TOKEN") or None
 
     print("\n" + "=" * 60)
-    print("🚀 Starting 1-Job Zero-Disk Cloud Stream Pipe Transfer")
+    print("🚀 Starting 1-Job Ultra-Fast Cloud Transfer")
     print(f"🔗 URL: {url}")
     print("=" * 60 + "\n")
 
-    pipeline = TransferPipeline(connections=16, gofile_token=token, use_stream_pipe=True)
+    pipeline = TransferPipeline(connections=16, gofile_token=token)
 
     try:
         summary = pipeline.process_url(url)
@@ -31,8 +31,8 @@ def main():
         print("\n" + "=" * 60)
         print(f"🎉 SUCCESS! GOFILE LINK: {summary.gofile_url}")
         print(f"📄 File: {summary.filename} ({summary.file_size / (1024 * 1024):.2f} MB)")
-        print(f"⚡ Transfer Mode: {summary.mode}")
-        print(f"⚡ Transfer Speed: {summary.upload_speed_mbps:.2f} MB/s")
+        print(f"⚡ Download Speed: {summary.download_speed_mbps:.2f} MB/s ({summary.download_time:.2f}s)")
+        print(f"⚡ Upload Speed: {summary.upload_speed_mbps:.2f} MB/s ({summary.upload_time:.2f}s)")
         print(f"⏱️ Total Time: {summary.total_time:.2f}s")
         print("=" * 60 + "\n")
 
@@ -49,8 +49,8 @@ def main():
                 f"| **GoFile Link** | [**{summary.gofile_url}**]({summary.gofile_url}) |\n"
                 f"| **File Name** | `{summary.filename}` |\n"
                 f"| **File Size** | {summary.file_size / (1024 * 1024):.2f} MB |\n"
-                f"| **Transfer Mode** | {summary.mode} |\n"
-                f"| **Transfer Speed** | {summary.upload_speed_mbps:.2f} MB/s |\n"
+                f"| **Download Speed** | {summary.download_speed_mbps:.2f} MB/s ({summary.download_time:.2f}s) |\n"
+                f"| **Upload Speed** | {summary.upload_speed_mbps:.2f} MB/s ({summary.upload_time:.2f}s) |\n"
                 f"| **Total Duration** | {summary.total_time:.2f}s |\n\n"
                 f"## 👉 [Click Here to Download from GoFile]({summary.gofile_url})\n"
             )
