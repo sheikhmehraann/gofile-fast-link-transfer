@@ -1,4 +1,4 @@
-name: ⚡ Fast Link to GoFile Cloud Transfer
+name: Fast Link to GoFile Cloud Transfer
 
 on:
   workflow_dispatch:
@@ -22,7 +22,7 @@ jobs:
       - name: 📥 Checkout Repository
         uses: actions/checkout@v4
 
-      - name: 🐍 Set up Python 3.11
+      - name: 🐍 Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -33,74 +33,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: ⚡ Execute Single-Job Transfer (Download ➔ GoFile)
-        id: transfer_step
+      - name: ⚡ Execute Cloud Transfer
         env:
           GOFILE_TOKEN: ${{ inputs.gofile_token }}
         run: |
-          python main.py "${{ inputs.url }}" > transfer.log 2>&1 || true
-          cat transfer.log
-          python cli.py --json-output "${{ inputs.url }}" > result.json || true
-
-      - name: 📊 Display & Publish GoFile Link
-        if: always()
-        run: |
-          python -c "
-          import json, os, re
-
-          gofile_link = None
-          filename = 'Unknown'
-          size_mb = 0
-
-          # Check result.json
-          if os.path.exists('result.json'):
-              try:
-                  with open('result.json', 'r') as f:
-                      content = f.read()
-                      json_match = re.search(r'\[\s*\{.*?\}\s*\]', content, re.DOTALL)
-                      if json_match:
-                          data = json.loads(json_match.group(0))
-                          if data and data[0].get('status') == 'success':
-                              item = data[0]
-                              gofile_link = item.get('gofile_url')
-                              filename = item.get('filename')
-                              size_mb = item.get('file_size', 0) / (1024 * 1024)
-              except Exception as e:
-                  print(f'JSON parsing error: {e}')
-
-          # Fallback check in transfer.log
-          if not gofile_link and os.path.exists('transfer.log'):
-              with open('transfer.log', 'r') as f:
-                  log_content = f.read()
-                  link_match = re.search(r'https://gofile\.io/d/([a-zA-Z0-9_-]+)', log_content)
-                  if link_match:
-                      gofile_link = link_match.group(0)
-
-          if gofile_link:
-              print('\n' + '='*60)
-              print(f'🎉 SUCCESS! GOFILE LINK: {gofile_link}')
-              print(f'📄 File: {filename} ({size_mb:.2f} MB)')
-              print('='*60 + '\n')
-              
-              # Set GitHub Notice annotation so it appears at top of run page
-              print(f'::notice title=🎉 GoFile Download Link::{gofile_link}')
-
-              summary = f'''# 🚀 Cloud Transfer Completed Successfully!
-
-| Metric | Details |
-| :--- | :--- |
-| **GoFile Link** | [**{gofile_link}**]({gofile_link}) |
-| **File Name** | \`{filename}\` |
-| **File Size** | {size_mb:.2f} MB |
-
-## 👉 [Click Here to Download from GoFile]({gofile_link})
-'''
-              if 'GITHUB_STEP_SUMMARY' in os.environ:
-                  with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
-                      f.write(summary)
-          else:
-              print('\n❌ Transfer failed or link not found.')
-              if 'GITHUB_STEP_SUMMARY' in os.environ:
-                  with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
-                      f.write('# ❌ Transfer Failed\nPlease check the logs above for error details.')
-          "
+          python scripts/cloud_runner.py "${{ inputs.url }}"
