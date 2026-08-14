@@ -1,0 +1,76 @@
+name: ⚡ Fast Link to GoFile Cloud Transfer
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: '🔗 Paste any downloadable link (Google Drive, SourceForge, MediaFire, etc.)'
+        required: true
+        type: string
+      gofile_token:
+        description: '🔑 (Optional) GoFile API Token'
+        required: false
+        type: string
+        default: ''
+
+jobs:
+  cloud_transfer:
+    name: 🚀 1-Job Cloud Link Transfer
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 📦 Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: ⚡ Execute Single-Job Transfer (Download ➔ GoFile)
+        id: transfer_step
+        env:
+          GOFILE_TOKEN: ${{ inputs.gofile_token }}
+        run: |
+          python cli.py --json-output "${{ inputs.url }}" > result.json
+          cat result.json
+
+      - name: 📊 Post Results to GitHub Summary
+        if: always()
+        run: |
+          python -c "
+          import json, os
+          if os.path.exists('result.json'):
+              try:
+                  data = json.load(open('result.json'))
+                  if data and isinstance(data, list) and data[0].get('status') == 'success':
+                      item = data[0]
+                      summary = f'''# 🚀 Transfer Completed Successfully!
+          
+          | Metric | Value |
+          | :--- | :--- |
+          | **GoFile Link** | [{item.get(\"gofile_url\")}]({item.get(\"gofile_url\")}) |
+          | **File Name** | \`{item.get(\"filename\")}\` |
+          | **File Size** | {item.get(\"file_size\") / (1024*1024):.2f} MB |
+          | **Download Speed** | {item.get(\"download_speed_mbps\"):.2f} MB/s ({item.get(\"download_time_s\"):.2f}s) |
+          | **Upload Speed** | {item.get(\"upload_speed_mbps\"):.2f} MB/s ({item.get(\"upload_time_s\"):.2f}s) |
+          | **Total Time** | {item.get(\"total_time_s\"):.2f}s |
+          
+          ## 👉 [Click Here to Open GoFile Download Page]({item.get(\"gofile_url\")})
+          '''
+                      with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
+                          f.write(summary)
+                  else:
+                      err = data[0].get('error') if data and isinstance(data, list) else 'Unknown error'
+                      with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
+                          f.write(f'# ❌ Transfer Failed\n\nError: {err}')
+              except Exception as e:
+                  with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
+                      f.write(f'# ❌ Failed to parse result\n\n{e}')
+          "
