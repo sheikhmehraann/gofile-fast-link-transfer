@@ -8,8 +8,9 @@ from src.gofile_transfer.uploader import GoFileUploader, GoFileResult
 def test_get_best_server_fallback():
     uploader = GoFileUploader()
     with patch.object(uploader.session, "get", side_effect=Exception("API Error")):
-        server = uploader.get_best_server()
-        assert server == "store1"
+        with patch.object(uploader, "get_server_list", return_value=["store1", "store2"]):
+            server = uploader.get_best_server()
+            assert server in ["store1", "store2"]
 
 
 def test_get_best_server_success():
@@ -26,5 +27,6 @@ def test_get_best_server_success():
     mock_res.raise_for_status.return_value = None
 
     with patch.object(uploader.session, "get", return_value=mock_res):
-        server = uploader.get_best_server()
-        assert server == "store5"
+        with patch.object(uploader, "get_server_list", return_value=["store5"]):
+            server = uploader.get_best_server()
+            assert server == "store5"

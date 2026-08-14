@@ -3,9 +3,10 @@
 from .pipeline import TransferPipeline, TransferSummary
 from .downloader import ParallelDownloader
 from .uploader import GoFileUploader, GoFileResult
+from .streamer import DirectStreamPipe, StreamWrapper
 from .resolvers import ResolverFactory, ResolvedURL
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 __all__ = [
     "TransferPipeline",
@@ -13,6 +14,8 @@ __all__ = [
     "ParallelDownloader",
     "GoFileUploader",
     "GoFileResult",
+    "DirectStreamPipe",
+    "StreamWrapper",
     "ResolverFactory",
     "ResolvedURL",
 ]
