@@ -1,6 +1,7 @@
-"""Ultra-fast 64-stream parallel HTTP downloader with aria2c acceleration and zero-copy preallocation."""
+"""Ultra-fast 64-stream parallel HTTP downloader with aria2c acceleration and posix_fallocate preallocation."""
 
 import os
+import sys
 import time
 import shutil
 import subprocess
@@ -53,16 +54,20 @@ class ParallelDownloader:
         return output_path
 
     def _download_aria2(self, direct_url: str, output_dir: str, filename: str) -> bool:
-        """Download via native aria2c with 64 connections and 64M RAM cache."""
+        """Download via native aria2c with 64 connections, posix_fallocate, and 128M RAM cache."""
+        alloc_mode = "falloc" if sys.platform.startswith("linux") else "none"
         cmd = [
             "aria2c",
             "--max-connection-per-server=16",
             f"--split={self.num_connections}",
-            "--min-split-size=1M",
-            "--file-allocation=none",
+            "--min-split-size=512K",
+            "--piece-length=1M",
+            f"--file-allocation={alloc_mode}",
+            "--disk-cache=128M",
+            "--enable-mmap=true",
+            "--max-overall-download-limit=0",
             "--summary-interval=1",
             "--console-log-level=warn",
-            "--disk-cache=64M",
             "--max-tries=10",
             "--retry-wait=1",
             "--dir", output_dir,

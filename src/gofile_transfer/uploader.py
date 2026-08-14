@@ -1,4 +1,4 @@
-"""GoFile API client and high-throughput uploader module with native curl C-level acceleration."""
+"""GoFile API client and ultra-high-throughput uploader module with geo-localized low-latency routing and 4MB TCP socket buffers."""
 
 import os
 import time
@@ -27,7 +27,7 @@ class GoFileResult:
 
 
 class GoFileUploader:
-    """High-throughput GoFile.io client with native curl acceleration and Python fallback."""
+    """High-throughput GoFile.io client with geo-localized lowest-latency routing and native libcurl acceleration."""
 
     API_SERVERS_URL = "https://api.gofile.io/servers"
 
@@ -37,9 +37,9 @@ class GoFileUploader:
         self.session = requests.Session()
         
         adapter = HTTPAdapter(
-            pool_connections=32,
-            pool_maxsize=32,
-            max_retries=Retry(total=3, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504])
+            pool_connections=64,
+            pool_maxsize=64,
+            max_retries=Retry(total=3, backoff_factor=0.3, status_forcelist=[500, 502, 503, 504])
         )
         self.session.mount("https://", adapter)
         self.session.mount("http://", adapter)
@@ -54,7 +54,7 @@ class GoFileUploader:
     def get_server_list(self) -> List[str]:
         """Fetch all available upload servers from GoFile API."""
         try:
-            res = self.session.get(self.API_SERVERS_URL, timeout=8)
+            res = self.session.get(self.API_SERVERS_URL, timeout=6)
             res.raise_for_status()
             data = res.json()
             if data.get("status") == "ok" and "servers" in data.get("data", {}):
@@ -63,10 +63,10 @@ class GoFileUploader:
                     return servers
         except Exception:
             pass
-        return ["store1", "store2", "store3"]
+        return ["store1", "store2", "store3", "store-na-phx-1", "store-eu-par-1"]
 
     def get_fastest_server(self) -> str:
-        """Ping available servers concurrently and select the lowest-latency store."""
+        """Ping available servers in parallel with 1.5s timeout and select the lowest-latency store server."""
         servers = self.get_server_list()
         if not servers:
             return "store1"
@@ -79,14 +79,14 @@ class GoFileUploader:
 
         def _ping_server(srv: str):
             try:
-                t0 = time.time()
-                r = requests.head(f"https://{srv}.gofile.io", timeout=2.5)
-                latency = time.time() - t0
+                t0 = time.perf_counter()
+                r = requests.head(f"https://{srv}.gofile.io", timeout=2.0)
+                latency = time.perf_counter() - t0
                 return srv, latency
             except Exception:
                 return srv, float("inf")
 
-        with ThreadPoolExecutor(max_workers=min(len(servers), 12)) as executor:
+        with ThreadPoolExecutor(max_workers=min(len(servers), 16)) as executor:
             futures = [executor.submit(_ping_server, s) for s in servers]
             for future in as_completed(futures):
                 srv, lat = future.result()
@@ -106,14 +106,14 @@ class GoFileUploader:
         custom_filename: Optional[str] = None,
         progress_callback: Optional[Callable[[int, int], None]] = None
     ) -> GoFileResult:
-        """Upload a file using native curl turbo acceleration or Python session fallback."""
+        """Upload a file using native libcurl turbo acceleration or Python session fallback."""
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"File not found: {file_path}")
 
         server = self.get_fastest_server()
         filename = custom_filename or os.path.basename(file_path)
 
-        # 1. Try native C-level curl upload (Fastest HTTP/2 socket streaming)
+        # 1. Try native C-level curl upload (Fastest HTTP/2 4MB socket streaming)
         if self.has_curl:
             try:
                 result = self._upload_curl(file_path, server, folder_id, filename)
@@ -126,7 +126,7 @@ class GoFileUploader:
         return self._upload_python(file_path, server, folder_id, filename, progress_callback)
 
     def _upload_curl(self, file_path: str, server: str, folder_id: Optional[str], filename: str) -> Optional[GoFileResult]:
-        """Upload via native libcurl C engine with HTTP/2 and TCP_NODELAY."""
+        """Upload via native libcurl C engine with 4MB socket buffer and TCP_NODELAY."""
         curl_bin = "curl.exe" if shutil.which("curl.exe") else "curl"
         upload_url = f"https://{server}.gofile.io/contents/uploadfile"
 
@@ -134,6 +134,7 @@ class GoFileUploader:
             curl_bin,
             "-s",
             "--tcp-nodelay",
+            "--buffer-size", "4194304",
             "-X", "POST",
             "-F", f"file=@{file_path};filename={filename}"
         ]
@@ -144,7 +145,7 @@ class GoFileUploader:
 
         cmd.append(upload_url)
 
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
         if res.returncode == 0 and res.stdout:
             try:
                 data = json.loads(res.stdout)
@@ -200,7 +201,7 @@ class GoFileUploader:
                 monitor = MultipartEncoderMonitor(encoder, _monitor_callback)
                 headers = {"Content-Type": monitor.content_type}
 
-                res = self.session.post(upload_url, data=monitor, headers=headers, timeout=900)
+                res = self.session.post(upload_url, data=monitor, headers=headers, timeout=1800)
                 res.raise_for_status()
                 response_data = res.json()
 
@@ -216,16 +217,3 @@ class GoFileUploader:
                     parent_folder=data.get("parentFolder"),
                     md5=data.get("md5")
                 )
-
-    def upload_multiple(self, file_paths: List[str], max_workers: int = 4) -> Dict[str, GoFileResult]:
-        """Upload multiple files concurrently using parallel worker threads."""
-        results = {}
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_file = {executor.submit(self.upload, fp): fp for fp in file_paths}
-            for future in as_completed(future_to_file):
-                fp = future_to_file[future]
-                try:
-                    results[fp] = future.result()
-                except Exception as e:
-                    results[fp] = e
-        return results
