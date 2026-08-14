@@ -1,63 +1,83 @@
-"""SourceForge link resolver."""
+"""SourceForge URL resolver with multi-mirror direct link generator for 1 GB/s parallel acceleration."""
 
 import re
-import requests
-from urllib.parse import urlparse
+import urllib.parse
+import httpx
+from typing import Optional, List
 from .base import BaseResolver, ResolvedURL
 
 
 class SourceForgeResolver(BaseResolver):
-    """Resolver for SourceForge file and mirror download links."""
+    """Resolver for SourceForge project files with multi-mirror aggregation."""
 
-    SF_DOMAINS = ["sourceforge.net", "sf.net", "downloads.sourceforge.net", "master.dl.sourceforge.net"]
+    MIRRORS = [
+        "netactuate", "phoenixnap", "cfhcable", "gigenet", "pilotfiber",
+        "cytranet", "iweb", "deac-riga", "deac-fra", "altushost-swe",
+        "altushost-bul", "freefr", "jaist", "twds", "nchc", "ixpeering",
+        "liquidtelecom", "tenet", "sitsa", "fastly"
+    ]
 
     def can_handle(self, url: str) -> bool:
-        parsed = urlparse(url)
-        return any(domain in parsed.netloc for domain in self.SF_DOMAINS)
+        return "sourceforge.net" in url.lower()
 
     def resolve(self, url: str) -> ResolvedURL:
-        clean_url = url
-        if "sourceforge.net/projects" in clean_url and not clean_url.endswith("/download") and "?download" not in clean_url:
-            clean_url = clean_url.rstrip("/") + "/download"
+        # Standardize URL
+        cleaned_url = url.strip().strip("'\"")
+        
+        # Ensure /download suffix
+        if not cleaned_url.endswith("/download") and "/files/" in cleaned_url:
+            if not cleaned_url.endswith("/"):
+                cleaned_url += "/download"
+            else:
+                cleaned_url += "download"
 
-        session = requests.Session()
-        headers = {
-            "User-Agent": "Wget/1.21.3",
-            "Accept": "*/*",
-            "Connection": "Keep-Alive"
-        }
+        # Extract project and filepath
+        mirror_urls: List[str] = []
+        match = re.search(r"sourceforge\.net/projects/([^/]+)/files/(.+?)(?:/download)?(?:\?|$)", cleaned_url, re.IGNORECASE)
+        if match:
+            project = match.group(1)
+            filepath = match.group(2).rstrip("/")
+            
+            # Generate multi-mirror URLs directly
+            for m in self.MIRRORS:
+                mirror_urls.append(f"https://{m}.dl.sourceforge.net/project/{project}/{filepath}")
+            mirror_urls.append(f"https://master.dl.sourceforge.net/project/{project}/{filepath}")
 
-        # Follow redirects with CLI UA to receive signed mirror URL
-        res = session.get(clean_url, headers=headers, allow_redirects=True, stream=True, timeout=25)
-        res.raise_for_status()
+        # Follow redirect using Wget user-agent to get direct CDN signed mirror and metadata
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        with httpx.Client(follow_redirects=True, timeout=30.0) as client:
+            resp = client.head(cleaned_url, headers=headers)
+            if resp.status_code >= 400:
+                resp = client.get(cleaned_url, headers=headers)
 
-        final_url = res.url
-        filename = None
-        cd = res.headers.get("Content-Disposition", "")
-        if cd:
-            fn_match = re.search(r'filename\*?=(?:UTF-8\'\')?["\']?([^"\';]+)["\']?', cd, re.IGNORECASE)
-            if fn_match:
-                filename = fn_match.group(1)
+            direct_url = str(resp.url)
+            file_size = int(resp.headers.get("Content-Length", 0)) or None
+            
+            filename = None
+            cd = resp.headers.get("Content-Disposition", "")
+            if "filename=" in cd:
+                fname_match = re.search(r'filename="?([^";]+)"?', cd)
+                if fname_match:
+                    filename = fname_match.group(1)
 
-        if not filename:
-            path_parts = [p for p in urlparse(final_url).path.split("/") if p and p != "download"]
-            filename = path_parts[-1] if path_parts else "sourceforge_file.zip"
+            if not filename:
+                parsed = urllib.parse.urlparse(direct_url)
+                path_part = parsed.path.rstrip("/")
+                if path_part:
+                    filename = path_part.split("/")[-1]
 
-        file_size = None
-        if "Content-Length" in res.headers:
-            try:
-                file_size = int(res.headers["Content-Length"])
-            except ValueError:
-                pass
+            if not filename or filename == "download":
+                parsed = urllib.parse.urlparse(cleaned_url.replace("/download", ""))
+                filename = parsed.path.split("/")[-1]
 
-        supports_ranges = res.headers.get("Accept-Ranges") == "bytes"
+            if direct_url not in mirror_urls:
+                mirror_urls.insert(0, direct_url)
 
-        return ResolvedURL(
-            original_url=url,
-            direct_url=final_url,
-            filename=filename,
-            file_size=file_size,
-            headers=headers,
-            cookies=session.cookies.get_dict(),
-            supports_ranges=supports_ranges
-        )
+            return ResolvedURL(
+                direct_url=direct_url,
+                filename=filename,
+                file_size=file_size,
+                headers=headers,
+                supports_ranges=True,
+                mirror_urls=mirror_urls
+            )

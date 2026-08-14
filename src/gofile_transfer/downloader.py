@@ -1,4 +1,4 @@
-"""Ultra-fast 64-stream parallel HTTP downloader with aria2c acceleration and posix_fallocate preallocation."""
+"""Ultra-fast 64-stream parallel HTTP downloader with aria2c multi-mirror acceleration and posix_fallocate preallocation."""
 
 import os
 import sys
@@ -7,13 +7,13 @@ import shutil
 import subprocess
 import httpx
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Optional, Callable
+from typing import Optional, Callable, List
 from rich.progress import Progress, TextColumn, BarColumn, DownloadColumn, TransferSpeedColumn, TimeRemainingColumn
 from .resolvers import ResolvedURL
 
 
 class ParallelDownloader:
-    """64-Stream parallel downloader with native aria2c acceleration and Python multi-worker fallback."""
+    """64-Stream parallel downloader with native aria2c multi-mirror acceleration and Python multi-worker fallback."""
 
     def __init__(self, num_connections: int = 64, chunk_size: int = 2 * 1024 * 1024, max_retries: int = 3):
         self.num_connections = num_connections
@@ -28,15 +28,16 @@ class ParallelDownloader:
         custom_filename: Optional[str] = None,
         progress_callback: Optional[Callable[[int, int], None]] = None
     ) -> str:
-        """Download resolved URL to local disk using 64 parallel streams."""
+        """Download resolved URL to local disk using 64 parallel streams across multiple mirrors."""
         filename = custom_filename or resolved.filename or "downloaded_file.bin"
         output_path = os.path.abspath(os.path.join(output_dir, filename))
         os.makedirs(output_dir, exist_ok=True)
 
-        # 1. Try aria2c if available (Fastest C++ 64-connection epoll engine)
+        # 1. Try aria2c if available with Multi-Mirror Aggregation (1 GB/s Multi-Source Engine)
         if self.has_aria2 and not resolved.cookies:
             try:
-                success = self._download_aria2(resolved.direct_url, output_dir, filename)
+                urls = resolved.mirror_urls if resolved.mirror_urls else [resolved.direct_url]
+                success = self._download_aria2(urls, output_dir, filename)
                 if success and os.path.exists(output_path) and os.path.getsize(output_path) > 0:
                     return output_path
             except Exception:
@@ -53,8 +54,8 @@ class ParallelDownloader:
 
         return output_path
 
-    def _download_aria2(self, direct_url: str, output_dir: str, filename: str) -> bool:
-        """Download via native aria2c with 64 connections, posix_fallocate, and 128M RAM cache."""
+    def _download_aria2(self, urls: List[str], output_dir: str, filename: str) -> bool:
+        """Download via native aria2c across multiple mirrors with 64 connections and 128M cache."""
         alloc_mode = "falloc" if sys.platform.startswith("linux") else "none"
         cmd = [
             "aria2c",
@@ -71,9 +72,9 @@ class ParallelDownloader:
             "--max-tries=10",
             "--retry-wait=1",
             "--dir", output_dir,
-            "--out", filename,
-            direct_url
+            "--out", filename
         ]
+        cmd.extend(urls)
         res = subprocess.run(cmd, capture_output=True, text=True)
         return res.returncode == 0
 
@@ -126,7 +127,7 @@ class ParallelDownloader:
             TransferSpeedColumn(),
             TimeRemainingColumn(),
         ) as progress:
-            task = progress.add_task(f"⚡ 64-Stream Parallel Download {os.path.basename(output_path)}", total=file_size)
+            task = progress.add_task(f"⚡ 64-Stream Multi-Source Download {os.path.basename(output_path)}", total=file_size)
 
             def _download_chunk(start: int, end: int, part_id: int):
                 nonlocal downloaded_bytes

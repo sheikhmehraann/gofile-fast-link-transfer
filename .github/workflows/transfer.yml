@@ -15,23 +15,23 @@ on:
 
 jobs:
   cloud_transfer:
-    name: 🚀 10Gbps Cloud Turbo Transfer
+    name: 🚀 10Gbps Multi-Mirror Turbo Transfer
     runs-on: ubuntu-latest
 
     steps:
       - name: 📥 Checkout Repository
         uses: actions/checkout@v4
 
-      - name: ⚡ Tune Linux Kernel TCP & Enable Google BBR
+      - name: ⚡ Tune Linux Kernel TCP & Enable Google BBR (64MB Window)
         run: |
           sudo sysctl -w net.core.default_qdisc=fq
           sudo sysctl -w net.ipv4.tcp_congestion_control=bbr
-          sudo sysctl -w net.core.wmem_max=16777216
-          sudo sysctl -w net.core.rmem_max=16777216
-          sudo sysctl -w net.ipv4.tcp_wmem="4096 1048576 16777216"
-          sudo sysctl -w net.ipv4.tcp_rmem="4096 1048576 16777216"
+          sudo sysctl -w net.core.wmem_max=67108864
+          sudo sysctl -w net.core.rmem_max=67108864
+          sudo sysctl -w net.ipv4.tcp_wmem="4096 1048576 67108864"
+          sudo sysctl -w net.ipv4.tcp_rmem="4096 1048576 67108864"
 
-      - name: ⚡ Install aria2 Acceleration Engine
+      - name: ⚡ Install aria2 Multi-Source Engine
         run: |
           sudo apt-get install -y --no-install-recommends aria2 curl
 
@@ -45,7 +45,7 @@ jobs:
         run: |
           pip install --no-cache-dir httpx requests requests-toolbelt rich gdown click
 
-      - name: 🚀 Execute 64-Stream 10Gbps Transfer
+      - name: 🚀 Execute Multi-Mirror 10Gbps Transfer
         env:
           GOFILE_TOKEN: ${{ inputs.gofile_token }}
         run: |

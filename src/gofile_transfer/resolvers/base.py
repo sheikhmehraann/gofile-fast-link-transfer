@@ -1,31 +1,31 @@
-"""Base classes and data models for link resolvers."""
+"""Base class and common types for URL resolvers."""
 
-from dataclasses import dataclass, field
-from typing import Optional, Dict
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from typing import Optional, Dict, List
 
 
 @dataclass
 class ResolvedURL:
     """Dataclass holding resolved direct download information."""
-    original_url: str
     direct_url: str
     filename: Optional[str] = None
     file_size: Optional[int] = None
     headers: Dict[str, str] = field(default_factory=dict)
     cookies: Dict[str, str] = field(default_factory=dict)
-    supports_ranges: bool = False
+    supports_ranges: bool = True
+    mirror_urls: List[str] = field(default_factory=list)
 
 
 class BaseResolver(ABC):
-    """Abstract Base Class for Link Resolvers."""
+    """Abstract base class for all link resolvers."""
 
     @abstractmethod
     def can_handle(self, url: str) -> bool:
-        """Check if this resolver supports the given URL."""
+        """Return True if this resolver can handle the given URL."""
         pass
 
     @abstractmethod
     def resolve(self, url: str) -> ResolvedURL:
-        """Resolve the input URL into a direct downloadable stream URL."""
+        """Resolve given URL to a direct downloadable URL."""
         pass

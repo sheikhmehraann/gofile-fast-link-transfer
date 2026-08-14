@@ -1,4 +1,4 @@
-"""GoFile API client and ultra-high-throughput uploader module with geo-localized low-latency routing and 4MB TCP socket buffers."""
+"""GoFile API client and ultra-high-throughput uploader module with geo-localized low-latency routing and 16MB TCP socket buffers."""
 
 import os
 import time
@@ -113,7 +113,7 @@ class GoFileUploader:
         server = self.get_fastest_server()
         filename = custom_filename or os.path.basename(file_path)
 
-        # 1. Try native C-level curl upload (Fastest HTTP/2 4MB socket streaming)
+        # 1. Try native C-level curl upload (Fastest HTTP/2 16MB socket streaming)
         if self.has_curl:
             try:
                 result = self._upload_curl(file_path, server, folder_id, filename)
@@ -126,7 +126,7 @@ class GoFileUploader:
         return self._upload_python(file_path, server, folder_id, filename, progress_callback)
 
     def _upload_curl(self, file_path: str, server: str, folder_id: Optional[str], filename: str) -> Optional[GoFileResult]:
-        """Upload via native libcurl C engine with 4MB socket buffer and TCP_NODELAY."""
+        """Upload via native libcurl C engine with 16MB socket buffer and TCP_NODELAY."""
         curl_bin = "curl.exe" if shutil.which("curl.exe") else "curl"
         upload_url = f"https://{server}.gofile.io/contents/uploadfile"
 
@@ -134,7 +134,7 @@ class GoFileUploader:
             curl_bin,
             "-s",
             "--tcp-nodelay",
-            "--buffer-size", "4194304",
+            "--buffer-size", "16777216",
             "-X", "POST",
             "-F", f"file=@{file_path};filename={filename}"
         ]
