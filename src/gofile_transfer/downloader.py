@@ -1,4 +1,4 @@
-"""Ultra-fast 64-stream parallel HTTP downloader with aria2c multi-mirror acceleration and posix_fallocate preallocation."""
+"""Ultra-fast parallel HTTP downloader with aria2c multi-connection acceleration and RAM disk buffering."""
 
 import os
 import sys
@@ -13,13 +13,21 @@ from .resolvers import ResolvedURL
 
 
 class ParallelDownloader:
-    """64-Stream parallel downloader with native aria2c multi-mirror acceleration and Python multi-worker fallback."""
+    """High-speed parallel downloader with native aria2c acceleration and RAM disk optimization."""
 
-    def __init__(self, num_connections: int = 64, chunk_size: int = 2 * 1024 * 1024, max_retries: int = 3):
+    def __init__(self, num_connections: int = 16, chunk_size: int = 2 * 1024 * 1024, max_retries: int = 3):
         self.num_connections = num_connections
         self.chunk_size = chunk_size
         self.max_retries = max_retries
         self.has_aria2 = shutil.which("aria2c") is not None
+
+    def get_optimal_directory(self, requested_dir: Optional[str] = None) -> str:
+        """Use Linux RAM disk /dev/shm if available for zero disk latency."""
+        if requested_dir and requested_dir != ".":
+            return requested_dir
+        if sys.platform.startswith("linux") and os.path.exists("/dev/shm") and os.access("/dev/shm", os.W_OK):
+            return "/dev/shm"
+        return requested_dir or "."
 
     def download(
         self,
@@ -28,22 +36,22 @@ class ParallelDownloader:
         custom_filename: Optional[str] = None,
         progress_callback: Optional[Callable[[int, int], None]] = None
     ) -> str:
-        """Download resolved URL to local disk using 64 parallel streams across multiple mirrors."""
+        """Download resolved URL using optimal 16-connection aria2c engine."""
         filename = custom_filename or resolved.filename or "downloaded_file.bin"
-        output_path = os.path.abspath(os.path.join(output_dir, filename))
-        os.makedirs(output_dir, exist_ok=True)
+        target_dir = self.get_optimal_directory(output_dir)
+        output_path = os.path.abspath(os.path.join(target_dir, filename))
+        os.makedirs(target_dir, exist_ok=True)
 
-        # 1. Try aria2c if available with Multi-Mirror Aggregation (1 GB/s Multi-Source Engine)
+        # 1. Try aria2c with researched optimal parameters
         if self.has_aria2 and not resolved.cookies:
             try:
-                urls = resolved.mirror_urls if resolved.mirror_urls else [resolved.direct_url]
-                success = self._download_aria2(urls, output_dir, filename)
+                success = self._download_aria2(resolved.direct_url, target_dir, filename)
                 if success and os.path.exists(output_path) and os.path.getsize(output_path) > 0:
                     return output_path
             except Exception:
                 pass
 
-        # 2. Multi-threaded range request engine (Python 64 parallel threads)
+        # 2. Multi-threaded range request engine (Python fallback)
         file_size = resolved.file_size
         supports_ranges = resolved.supports_ranges and file_size and file_size > (1 * 1024 * 1024)
 
@@ -54,34 +62,36 @@ class ParallelDownloader:
 
         return output_path
 
-    def _download_aria2(self, urls: List[str], output_dir: str, filename: str) -> bool:
-        """Download via native aria2c across multiple mirrors with 64 connections and 128M cache."""
+    def _download_aria2(self, direct_url: str, output_dir: str, filename: str) -> bool:
+        """Download via native aria2c with researched optimal production flags."""
         alloc_mode = "falloc" if sys.platform.startswith("linux") else "none"
         cmd = [
             "aria2c",
-            "--max-connection-per-server=16",
+            f"--max-connection-per-server={self.num_connections}",
             f"--split={self.num_connections}",
-            "--min-split-size=512K",
+            "--min-split-size=1M",
             "--piece-length=1M",
             f"--file-allocation={alloc_mode}",
             "--disk-cache=128M",
             "--enable-mmap=true",
-            "--max-overall-download-limit=0",
+            '--user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"',
+            "--allow-overwrite=true",
+            "--auto-file-renaming=false",
+            "--conditional-get=true",
+            "--max-tries=5",
+            "--retry-wait=2",
             "--summary-interval=1",
             "--console-log-level=warn",
-            "--max-tries=10",
-            "--retry-wait=1",
             "--dir", output_dir,
-            "--out", filename
+            "--out", filename,
+            direct_url
         ]
-        cmd.extend(urls)
         res = subprocess.run(cmd, capture_output=True, text=True)
         return res.returncode == 0
 
     def _download_single(self, resolved: ResolvedURL, output_path: str, progress_callback: Optional[Callable[[int, int], None]] = None):
         """Single-stream download with 2MB buffer."""
         headers = resolved.headers.copy()
-        headers["User-Agent"] = "Wget/1.21.3"
 
         with httpx.Client(follow_redirects=True, timeout=60.0, cookies=resolved.cookies) as client:
             with client.stream("GET", resolved.direct_url, headers=headers) as response:
@@ -106,7 +116,7 @@ class ParallelDownloader:
                                 progress_callback(downloaded, total_size)
 
     def _download_parallel(self, resolved: ResolvedURL, output_path: str, file_size: int, progress_callback: Optional[Callable[[int, int], None]] = None):
-        """Multi-threaded range request download with 64 parallel workers and pre-allocated disk writes."""
+        """Multi-threaded range request download with parallel workers and pre-allocated disk writes."""
         workers = min(self.num_connections, max(1, file_size // (1024 * 1024)))
         part_size = file_size // workers
         ranges = []
@@ -127,13 +137,12 @@ class ParallelDownloader:
             TransferSpeedColumn(),
             TimeRemainingColumn(),
         ) as progress:
-            task = progress.add_task(f"⚡ 64-Stream Multi-Source Download {os.path.basename(output_path)}", total=file_size)
+            task = progress.add_task(f"⚡ Parallel Download {os.path.basename(output_path)}", total=file_size)
 
             def _download_chunk(start: int, end: int, part_id: int):
                 nonlocal downloaded_bytes
                 range_headers = resolved.headers.copy()
                 range_headers["Range"] = f"bytes={start}-{end}"
-                range_headers["User-Agent"] = "Wget/1.21.3"
 
                 for attempt in range(self.max_retries):
                     try:

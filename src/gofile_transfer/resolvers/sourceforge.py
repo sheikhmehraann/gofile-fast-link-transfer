@@ -1,54 +1,40 @@
-"""SourceForge URL resolver with multi-mirror direct link generator for 1 GB/s parallel acceleration."""
+"""SourceForge URL resolver with canonical GeoDNS director resolution."""
 
 import re
 import urllib.parse
 import httpx
-from typing import Optional, List
+from typing import Optional
 from .base import BaseResolver, ResolvedURL
 
 
 class SourceForgeResolver(BaseResolver):
-    """Resolver for SourceForge project files with multi-mirror aggregation."""
+    """Resolver for SourceForge project files using canonical director redirects."""
 
-    MIRRORS = [
-        "netactuate", "phoenixnap", "cfhcable", "gigenet", "pilotfiber",
-        "cytranet", "iweb", "deac-riga", "deac-fra", "altushost-swe",
-        "altushost-bul", "freefr", "jaist", "twds", "nchc", "ixpeering",
-        "liquidtelecom", "tenet", "sitsa", "fastly"
-    ]
+    USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
 
     def can_handle(self, url: str) -> bool:
         return "sourceforge.net" in url.lower()
 
     def resolve(self, url: str) -> ResolvedURL:
-        # Standardize URL
         cleaned_url = url.strip().strip("'\"")
         
-        # Ensure /download suffix
-        if not cleaned_url.endswith("/download") and "/files/" in cleaned_url:
-            if not cleaned_url.endswith("/"):
-                cleaned_url += "/download"
-            else:
-                cleaned_url += "download"
+        # Canonical director format: https://downloads.sourceforge.net/project/<PROJECT>/<FILEPATH>
+        match = re.search(r"sourceforge\.net/(?:projects/([^/]+)/files/|p/([^/]+)/.*?/download\?|project/([^/]+)/)(.+?)(?:/download)?(?:\?.*)?$", cleaned_url, re.IGNORECASE)
+        
+        headers = {"User-Agent": self.USER_AGENT}
 
-        # Extract project and filepath
-        mirror_urls: List[str] = []
-        match = re.search(r"sourceforge\.net/projects/([^/]+)/files/(.+?)(?:/download)?(?:\?|$)", cleaned_url, re.IGNORECASE)
         if match:
-            project = match.group(1)
-            filepath = match.group(2).rstrip("/")
-            
-            # Generate multi-mirror URLs directly
-            for m in self.MIRRORS:
-                mirror_urls.append(f"https://{m}.dl.sourceforge.net/project/{project}/{filepath}")
-            mirror_urls.append(f"https://master.dl.sourceforge.net/project/{project}/{filepath}")
+            project = match.group(1) or match.group(2) or match.group(3)
+            filepath = match.group(4).rstrip("/")
+            canonical_url = f"https://downloads.sourceforge.net/project/{project}/{filepath}"
+        else:
+            canonical_url = cleaned_url if cleaned_url.endswith("/download") else f"{cleaned_url}/download"
 
-        # Follow redirect using Wget user-agent to get direct CDN signed mirror and metadata
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        # Resolve 302 redirect chain to signed mirror CDN with token
         with httpx.Client(follow_redirects=True, timeout=30.0) as client:
-            resp = client.head(cleaned_url, headers=headers)
+            resp = client.head(canonical_url, headers=headers)
             if resp.status_code >= 400:
-                resp = client.get(cleaned_url, headers=headers)
+                resp = client.get(canonical_url, headers=headers)
 
             direct_url = str(resp.url)
             file_size = int(resp.headers.get("Content-Length", 0)) or None
@@ -70,14 +56,11 @@ class SourceForgeResolver(BaseResolver):
                 parsed = urllib.parse.urlparse(cleaned_url.replace("/download", ""))
                 filename = parsed.path.split("/")[-1]
 
-            if direct_url not in mirror_urls:
-                mirror_urls.insert(0, direct_url)
-
             return ResolvedURL(
                 direct_url=direct_url,
                 filename=filename,
                 file_size=file_size,
                 headers=headers,
                 supports_ranges=True,
-                mirror_urls=mirror_urls
+                mirror_urls=[direct_url, canonical_url]
             )

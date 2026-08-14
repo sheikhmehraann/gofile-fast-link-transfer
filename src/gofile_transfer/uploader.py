@@ -45,7 +45,7 @@ class GoFileUploader:
         self.session.mount("http://", adapter)
 
         self.session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
             "Connection": "keep-alive"
         })
         if self.token:
@@ -126,7 +126,7 @@ class GoFileUploader:
         return self._upload_python(file_path, server, folder_id, filename, progress_callback)
 
     def _upload_curl(self, file_path: str, server: str, folder_id: Optional[str], filename: str) -> Optional[GoFileResult]:
-        """Upload via native libcurl C engine with 16MB socket buffer and TCP_NODELAY."""
+        """Upload via native libcurl C engine with 16MB socket buffer, Expect: suppression, and TCP_NODELAY."""
         curl_bin = "curl.exe" if shutil.which("curl.exe") else "curl"
         upload_url = f"https://{server}.gofile.io/contents/uploadfile"
 
@@ -134,6 +134,7 @@ class GoFileUploader:
             curl_bin,
             "-s",
             "--tcp-nodelay",
+            "-H", "Expect:",
             "--buffer-size", "16777216",
             "-X", "POST",
             "-F", f"file=@{file_path};filename={filename}"
@@ -199,7 +200,7 @@ class GoFileUploader:
                         progress_callback(monitor.bytes_read, file_size)
 
                 monitor = MultipartEncoderMonitor(encoder, _monitor_callback)
-                headers = {"Content-Type": monitor.content_type}
+                headers = {"Content-Type": monitor.content_type, "Expect": ""}
 
                 res = self.session.post(upload_url, data=monitor, headers=headers, timeout=1800)
                 res.raise_for_status()
