@@ -1,4 +1,4 @@
-"""GoFile API client and high-throughput uploader module with native curl acceleration."""
+"""GoFile API client and high-throughput uploader module with native curl C-level acceleration."""
 
 import os
 import time
@@ -126,11 +126,17 @@ class GoFileUploader:
         return self._upload_python(file_path, server, folder_id, filename, progress_callback)
 
     def _upload_curl(self, file_path: str, server: str, folder_id: Optional[str], filename: str) -> Optional[GoFileResult]:
-        """Upload via native libcurl C engine."""
+        """Upload via native libcurl C engine with HTTP/2 and TCP_NODELAY."""
         curl_bin = "curl.exe" if shutil.which("curl.exe") else "curl"
         upload_url = f"https://{server}.gofile.io/contents/uploadfile"
 
-        cmd = [curl_bin, "-s", "-X", "POST", "-F", f"file=@{file_path};filename={filename}"]
+        cmd = [
+            curl_bin,
+            "-s",
+            "--tcp-nodelay",
+            "-X", "POST",
+            "-F", f"file=@{file_path};filename={filename}"
+        ]
         if folder_id:
             cmd.extend(["-F", f"folderId={folder_id}"])
         if self.token:
@@ -179,7 +185,7 @@ class GoFileUploader:
 
             with Progress(
                 TextColumn("[bold yellow]{task.description}"),
-                BarColumn(),
+                BarColumn(complete_style="bold yellow", finished_style="bold yellow"),
                 DownloadColumn(),
                 TransferSpeedColumn(),
                 TimeRemainingColumn(),
@@ -210,3 +216,16 @@ class GoFileUploader:
                     parent_folder=data.get("parentFolder"),
                     md5=data.get("md5")
                 )
+
+    def upload_multiple(self, file_paths: List[str], max_workers: int = 4) -> Dict[str, GoFileResult]:
+        """Upload multiple files concurrently using parallel worker threads."""
+        results = {}
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_file = {executor.submit(self.upload, fp): fp for fp in file_paths}
+            for future in as_completed(future_to_file):
+                fp = future_to_file[future]
+                try:
+                    results[fp] = future.result()
+                except Exception as e:
+                    results[fp] = e
+        return results

@@ -1,19 +1,16 @@
 #!/usr/bin/env python3
-"""Unified One-Job Entrypoint for GoFile Fast Link Transfer.
-
-Usage:
-  python main.py                                (Interactive prompt)
-  python main.py "https://example.com/file.zip" (Direct execution)
-"""
+"""Main Entry Point for GoFile Fast Link Transfer with Rich Cyberpunk Aesthetic."""
 
 import sys
 import os
-
-# Ensure src is in Python path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
 from rich.console import Console
 from rich.panel import Panel
+from rich.text import Text
+from rich.prompt import Prompt
+
+# Ensure local package import
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 from src.gofile_transfer.pipeline import TransferPipeline
 
 if sys.platform == "win32":
@@ -25,39 +22,51 @@ if sys.platform == "win32":
 
 console = Console(force_terminal=True, legacy_windows=False)
 
+BANNER = r"""
+  ██████╗  ██████╗ ███████╗██╗██╗     ███████╗
+ ██╔════╝ ██╔═══██╗██╔════╝██║██║     ██╔════╝
+ ██║  ███╗██║   ██║█████╗  ██║██║     █████╗  
+ ██║   ██║██║   ██║██╔══╝  ██║██║     ██╔══╝  
+ ╚██████╔╝╚██████╔╝██║     ██║███████╗███████╗
+  ╚═════╝  ╚═════╝ ╚═╝     ╚═╝╚══════╝╚══════╝
+ ⚡ Ultra-Fast Multi-Thread Link Transfer Engine ⚡
+"""
 
-def run_job(url: str):
-    """Execute the single link-to-GoFile job."""
-    cleaned_url = url.strip().strip("'\"")
-    if not cleaned_url:
-        console.print("[bold red][X] Error: URL cannot be empty.[/bold red]")
-        return
 
-    pipeline = TransferPipeline(connections=16)
-    try:
-        summary = pipeline.process_url(cleaned_url)
-        console.print(f"\n[bold green]✅ Ready to share:[/bold green] [bold underline cyan]{summary.gofile_url}[/bold underline cyan]\n")
-    except Exception as e:
-        console.print(f"\n[bold red][X] Transfer Failed:[/bold red] {e}\n")
+def print_banner():
+    banner_text = Text(BANNER, style="bold cyan")
+    info_panel = Panel(
+        banner_text,
+        subtitle="[bold yellow]Google Drive • SourceForge • MediaFire • Dropbox • Direct Links[/bold yellow]",
+        border_style="bold blue",
+    )
+    console.print(info_panel)
 
 
 def main():
-    console.print(Panel(
-        "[bold cyan]⚡ GoFile Fast Link Transfer[/bold cyan]\n"
-        "[dim]Supported: Google Drive, SourceForge, MediaFire, Dropbox, Direct URLs[/dim]",
-        border_style="cyan"
-    ))
+    print_banner()
 
-    if len(sys.argv) > 1:
-        target_url = sys.argv[1]
+    if len(sys.argv) > 1 and sys.argv[1].strip():
+        url = sys.argv[1].strip().strip("'\"")
     else:
-        try:
-            target_url = console.input("[bold yellow]👉 Paste download link:[/bold yellow] ")
-        except (KeyboardInterrupt, EOFError):
-            console.print("\n[dim]Aborted by user.[/dim]")
-            sys.exit(0)
+        url = Prompt.ask("\n[bold green]👉 Enter download link[/bold green]")
 
-    run_job(target_url)
+    if not url:
+        console.print("[bold red]❌ Error: No download link provided![/bold red]")
+        sys.exit(1)
+
+    token = os.environ.get("GOFILE_TOKEN") or None
+
+    try:
+        pipeline = TransferPipeline(connections=32, gofile_token=token)
+        summary = pipeline.process_url(url)
+        console.print(f"\n[bold green]✅ Ready to share:[/bold green] [bold underline cyan]{summary.gofile_url}[/bold underline cyan]\n")
+    except KeyboardInterrupt:
+        console.print("\n[bold red][!] Transfer cancelled by user.[/bold red]")
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"\n[bold red][!] Transfer failed:[/bold red] {e}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

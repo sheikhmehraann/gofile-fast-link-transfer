@@ -1,151 +1,368 @@
 #!/usr/bin/env python3
-"""Zero-dependency local Web Dashboard for GoFile Fast Link Transfer.
+"""Zero-dependency modern glassmorphic Web App for GoFile Fast Link Transfer."""
 
-Usage:
-  python web_app.py
-  Open http://localhost:5000 in your browser.
-"""
-
+import http.server
+import socketserver
+import json
+import urllib.parse
 import sys
 import os
-import json
 import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from urllib.parse import parse_qs, urlparse
+import time
 
-# Ensure src in sys.path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from src.gofile_transfer.pipeline import TransferPipeline
 
-HTML_TEMPLATE = """<!DOCTYPE html>
+PORT = 5000
+
+HTML_PAGE = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>GoFile Fast Link Transfer</title>
+  <title>GoFile Fast Link Transfer - Turbo Edition</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;800&family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
   <style>
     :root {
-      --bg: #0f172a;
-      --card: #1e293b;
-      --primary: #3b82f6;
-      --primary-hover: #2563eb;
-      --text: #f8fafc;
+      --bg: #090d16;
+      --card-bg: rgba(18, 26, 43, 0.75);
+      --card-border: rgba(255, 255, 255, 0.08);
+      --primary: #38bdf8;
+      --primary-glow: rgba(56, 189, 248, 0.25);
+      --accent: #10b981;
+      --accent-glow: rgba(16, 185, 129, 0.25);
+      --text: #f1f5f9;
       --text-muted: #94a3b8;
-      --border: #334155;
-      --success: #10b981;
-      --error: #ef4444;
     }
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-    body { background: var(--bg); color: var(--text); display: flex; justify-content: center; align-items: center; min-height: 100vh; padding: 20px; }
-    .container { width: 100%; max-width: 640px; background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 32px; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5); }
-    .header { text-align: center; margin-bottom: 24px; }
-    .header h1 { font-size: 26px; font-weight: 700; margin-bottom: 8px; background: linear-gradient(135deg, #60a5fa, #38bdf8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-    .header p { color: var(--text-muted); font-size: 14px; }
-    .input-group { display: flex; flex-direction: column; gap: 12px; margin-bottom: 24px; }
-    input[type="text"] { width: 100%; padding: 14px 16px; background: #0f172a; border: 1px solid var(--border); border-radius: 10px; color: #fff; font-size: 15px; outline: none; transition: border-color 0.2s; }
-    input[type="text"]:focus { border-color: var(--primary); }
-    .btn { background: var(--primary); color: white; border: none; border-radius: 10px; padding: 14px; font-size: 16px; font-weight: 600; cursor: pointer; transition: background 0.2s; display: flex; justify-content: center; align-items: center; gap: 8px; }
-    .btn:hover { background: var(--primary-hover); }
-    .btn:disabled { opacity: 0.6; cursor: not-allowed; }
-    .status-card { display: none; margin-top: 24px; padding: 20px; background: #0f172a; border: 1px solid var(--border); border-radius: 12px; }
-    .spinner { display: inline-block; width: 18px; height: 18px; border: 3px solid rgba(255,255,255,.3); border-radius: 50%; border-top-color: #fff; animation: spin 1s ease-in-out infinite; }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    .result-row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 14px; }
-    .result-label { color: var(--text-muted); }
-    .result-val { font-weight: 600; }
-    .gofile-link-box { margin-top: 16px; padding: 12px; background: rgba(16, 185, 129, 0.1); border: 1px solid var(--success); border-radius: 8px; text-align: center; }
-    .gofile-link-box a { color: var(--success); text-decoration: none; font-size: 16px; font-weight: 700; word-break: break-all; }
-    .badge-list { display: flex; gap: 8px; justify-content: center; margin-top: 16px; flex-wrap: wrap; }
-    .badge { font-size: 12px; background: #334155; padding: 4px 10px; border-radius: 20px; color: var(--text-muted); }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: 'Plus Jakarta Sans', sans-serif;
+    }
+
+    body {
+      background: radial-gradient(circle at 50% 0%, #172554 0%, var(--bg) 60%);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 680px;
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border-radius: 24px;
+      padding: 40px;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.6);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .container::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: linear-gradient(90deg, var(--primary), #818cf8, var(--accent));
+    }
+
+    .header {
+      text-align: center;
+      margin-bottom: 32px;
+    }
+
+    .logo-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(56, 189, 248, 0.1);
+      border: 1px solid rgba(56, 189, 248, 0.25);
+      color: var(--primary);
+      padding: 6px 14px;
+      border-radius: 9999px;
+      font-size: 0.8rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      margin-bottom: 16px;
+    }
+
+    h1 {
+      font-size: 2.2rem;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      background: linear-gradient(135deg, #ffffff 40%, #94a3b8 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 8px;
+    }
+
+    p.subtitle {
+      color: var(--text-muted);
+      font-size: 0.95rem;
+    }
+
+    .hosts-grid {
+      display: flex;
+      justify-content: center;
+      gap: 12px;
+      margin-top: 16px;
+      flex-wrap: wrap;
+    }
+
+    .host-pill {
+      font-size: 0.75rem;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      padding: 4px 10px;
+      border-radius: 8px;
+      color: var(--text-muted);
+    }
+
+    .input-group {
+      margin-top: 28px;
+    }
+
+    .input-wrapper {
+      position: relative;
+      margin-bottom: 16px;
+    }
+
+    input[type="text"] {
+      width: 100%;
+      background: rgba(10, 15, 29, 0.8);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      padding: 16px 20px;
+      border-radius: 14px;
+      color: #fff;
+      font-size: 1rem;
+      font-family: 'JetBrains Mono', monospace;
+      outline: none;
+      transition: all 0.2s ease;
+    }
+
+    input[type="text"]:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px var(--primary-glow);
+    }
+
+    button.btn-transfer {
+      width: 100%;
+      background: linear-gradient(135deg, #0284c7 0%, #2563eb 100%);
+      color: #fff;
+      border: none;
+      padding: 16px;
+      border-radius: 14px;
+      font-size: 1.05rem;
+      font-weight: 700;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      box-shadow: 0 10px 25px -5px rgba(37, 99, 235, 0.4);
+      transition: all 0.2s ease;
+    }
+
+    button.btn-transfer:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 15px 30px -5px rgba(37, 99, 235, 0.6);
+    }
+
+    button.btn-transfer:active {
+      transform: translateY(0);
+    }
+
+    button.btn-transfer:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .status-card {
+      margin-top: 24px;
+      padding: 20px;
+      border-radius: 14px;
+      background: rgba(10, 15, 29, 0.8);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      display: none;
+    }
+
+    .progress-bar-container {
+      width: 100%;
+      height: 8px;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 999px;
+      overflow: hidden;
+      margin: 14px 0;
+    }
+
+    .progress-bar-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, var(--primary), var(--accent));
+      transition: width 0.3s ease;
+      animation: pulse 1.5s infinite;
+    }
+
+    @keyframes pulse {
+      0% { opacity: 0.8; }
+      50% { opacity: 1; }
+      100% { opacity: 0.8; }
+    }
+
+    .result-box {
+      margin-top: 16px;
+      padding: 16px;
+      background: rgba(16, 185, 129, 0.1);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      border-radius: 12px;
+      display: none;
+    }
+
+    .result-link {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 8px;
+    }
+
+    .result-link a {
+      color: #34d399;
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 700;
+      text-decoration: none;
+      word-break: break-all;
+    }
+
+    .btn-copy {
+      background: #059669;
+      color: white;
+      border: none;
+      padding: 8px 14px;
+      border-radius: 8px;
+      font-weight: 700;
+      font-size: 0.85rem;
+      cursor: pointer;
+      white-space: nowrap;
+    }
   </style>
 </head>
 <body>
+
   <div class="container">
     <div class="header">
-      <h1>⚡ GoFile Fast Link Transfer</h1>
-      <p>Download from any host & stream straight to GoFile</p>
-      <div class="badge-list">
-        <span class="badge">Google Drive</span>
-        <span class="badge">SourceForge</span>
-        <span class="badge">MediaFire</span>
-        <span class="badge">Dropbox</span>
-        <span class="badge">Direct URLs</span>
+      <div class="logo-badge">⚡ 32-Stream Turbo Engine</div>
+      <h1>GoFile Fast Transfer</h1>
+      <p class="subtitle">Transfer any downloadable link directly to GoFile in seconds</p>
+      
+      <div class="hosts-grid">
+        <span class="host-pill">Google Drive</span>
+        <span class="host-pill">SourceForge</span>
+        <span class="host-pill">MediaFire</span>
+        <span class="host-pill">Dropbox</span>
+        <span class="host-pill">Direct CDN</span>
       </div>
     </div>
 
-    <form id="transferForm" onsubmit="startTransfer(event)">
-      <div class="input-group">
-        <input type="text" id="urlInput" placeholder="Paste downloadable link here..." required />
-        <button type="submit" id="submitBtn" class="btn">Start Transfer</button>
+    <div class="input-group">
+      <div class="input-wrapper">
+        <input type="text" id="urlInput" placeholder="Paste downloadable link here..." autocomplete="off">
       </div>
-    </form>
+      <button class="btn-transfer" id="transferBtn" onclick="startTransfer()">
+        <span>🚀 Start Turbo Transfer</span>
+      </button>
+    </div>
 
-    <div id="statusCard" class="status-card">
-      <div id="loadingState" style="text-align: center; padding: 12px;">
-        <div class="spinner" style="margin-bottom: 12px;"></div>
-        <p id="statusMsg" style="color: var(--text-muted); font-size: 14px;">Resolving, downloading, and uploading...</p>
+    <div class="status-card" id="statusCard">
+      <div style="display: flex; justify-content: space-between; font-size: 0.9rem;">
+        <span id="statusLabel" style="color: var(--primary); font-weight: 600;">Connecting...</span>
+        <span id="speedLabel" style="color: var(--text-muted); font-family: 'JetBrains Mono';">32x Streams</span>
       </div>
-      <div id="resultState" style="display: none;">
-        <div class="result-row"><span class="result-label">File Name:</span><span id="resFilename" class="result-val"></span></div>
-        <div class="result-row"><span class="result-label">File Size:</span><span id="resSize" class="result-val"></span></div>
-        <div class="result-row"><span class="result-label">Download Speed:</span><span id="resDlSpeed" class="result-val"></span></div>
-        <div class="result-row"><span class="result-label">Upload Speed:</span><span id="resUlSpeed" class="result-val"></span></div>
-        <div class="result-row"><span class="result-label">Total Time:</span><span id="resTime" class="result-val"></span></div>
-        <div class="gofile-link-box">
-          <a id="resLink" href="#" target="_blank"></a>
-        </div>
+      <div class="progress-bar-container">
+        <div class="progress-bar-fill" id="progressBar"></div>
+      </div>
+      <div id="fileMeta" style="font-size: 0.85rem; color: var(--text-muted);"></div>
+    </div>
+
+    <div class="result-box" id="resultBox">
+      <div style="font-size: 0.9rem; font-weight: 700; color: #10b981;">🎉 Transfer Successful!</div>
+      <div class="result-link">
+        <a href="#" id="gofileLink" target="_blank">https://gofile.io/d/...</a>
+        <button class="btn-copy" onclick="copyLink()">📋 Copy</button>
       </div>
     </div>
   </div>
 
   <script>
-    async function startTransfer(e) {
-      e.preventDefault();
-      const url = document.getElementById('urlInput').value.trim();
-      if (!url) return;
+    async function startTransfer() {
+      const urlInput = document.getElementById('urlInput');
+      const url = urlInput.value.trim();
+      if (!url) return alert('Please enter a valid link!');
 
-      const btn = document.getElementById('submitBtn');
+      const btn = document.getElementById('transferBtn');
       const statusCard = document.getElementById('statusCard');
-      const loadingState = document.getElementById('loadingState');
-      const resultState = document.getElementById('resultState');
+      const statusLabel = document.getElementById('statusLabel');
+      const progressBar = document.getElementById('progressBar');
+      const fileMeta = document.getElementById('fileMeta');
+      const resultBox = document.getElementById('resultBox');
 
       btn.disabled = true;
       statusCard.style.display = 'block';
-      loadingState.style.display = 'block';
-      resultState.style.display = 'none';
+      resultBox.style.display = 'none';
+      progressBar.style.width = '20%';
+      statusLabel.innerText = '⚡ Resolving link & selecting fastest server...';
 
       try {
-        const response = await fetch('/api/transfer', {
+        const res = await fetch('/api/transfer', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url })
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ url: url })
         });
 
-        const data = await response.json();
-        if (data.status === 'success') {
-          loadingState.style.display = 'none';
-          resultState.style.display = 'block';
+        progressBar.style.width = '70%';
+        statusLabel.innerText = '🚀 32-Stream Downloading & Uploading...';
 
-          document.getElementById('resFilename').innerText = data.filename;
-          document.getElementById('resSize').innerText = (data.file_size / (1024 * 1024)).toFixed(2) + ' MB';
-          document.getElementById('resDlSpeed').innerText = data.download_speed_mbps.toFixed(2) + ' MB/s (' + data.download_time_s.toFixed(2) + 's)';
-          document.getElementById('resUlSpeed').innerText = data.upload_speed_mbps.toFixed(2) + ' MB/s (' + data.upload_time_s.toFixed(2) + 's)';
-          document.getElementById('resTime').innerText = data.total_time_s.toFixed(2) + 's';
+        const data = await res.json();
+        if (data.status === 'ok') {
+          progressBar.style.width = '100%';
+          statusLabel.innerText = '✅ Transfer Complete!';
+          fileMeta.innerText = `${data.filename} (${(data.size / (1024*1024)).toFixed(2)} MB) • Total: ${data.duration.toFixed(2)}s`;
           
-          const linkElem = document.getElementById('resLink');
-          linkElem.href = data.gofile_url;
-          linkElem.innerText = '👉 ' + data.gofile_url;
+          document.getElementById('gofileLink').href = data.gofile_url;
+          document.getElementById('gofileLink').innerText = data.gofile_url;
+          resultBox.style.display = 'block';
         } else {
-          alert('Transfer Failed: ' + (data.error || 'Unknown error'));
+          alert('Transfer Failed: ' + data.error);
           statusCard.style.display = 'none';
         }
       } catch (err) {
-        alert('Request error: ' + err.message);
+        alert('Network or Server Error: ' + err);
         statusCard.style.display = 'none';
       } finally {
         btn.disabled = false;
       }
+    }
+
+    function copyLink() {
+      const link = document.getElementById('gofileLink').href;
+      navigator.clipboard.writeText(link);
+      alert('Copied to clipboard: ' + link);
     }
   </script>
 </body>
@@ -153,68 +370,51 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 """
 
 
-class WebHandler(BaseHTTPRequestHandler):
+class WebHandler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        pass
+
     def do_GET(self):
-        parsed = urlparse(self.path)
-        if parsed.path == "/" or parsed.path == "/index.html":
+        if self.path == "/" or self.path == "/index.html":
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
-            self.wfile.write(HTML_TEMPLATE.encode("utf-8"))
+            self.wfile.write(HTML_PAGE.encode("utf-8"))
         else:
-            self.send_response(404)
-            self.end_headers()
+            self.send_error(404)
 
     def do_POST(self):
-        parsed = urlparse(self.path)
-        if parsed.path == "/api/transfer":
+        if self.path == "/api/transfer":
             content_len = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(content_len).decode("utf-8")
+            data = json.loads(body)
+            url = data.get("url")
+
+            pipeline = TransferPipeline(connections=32)
             try:
-                data = json.loads(body)
-                url = data.get("url", "").strip()
-
-                if not url:
-                    raise ValueError("URL cannot be empty.")
-
-                pipeline = TransferPipeline(connections=16)
                 summary = pipeline.process_url(url)
-
-                res_payload = {
-                    "status": "success",
-                    "url": summary.original_url,
-                    "filename": summary.filename,
-                    "file_size": summary.file_size,
+                response = {
+                    "status": "ok",
                     "gofile_url": summary.gofile_url,
-                    "gofile_code": summary.gofile_code,
-                    "download_time_s": summary.download_time,
-                    "upload_time_s": summary.upload_time,
-                    "total_time_s": summary.total_time,
-                    "download_speed_mbps": summary.download_speed_mbps,
-                    "upload_speed_mbps": summary.upload_speed_mbps,
+                    "filename": summary.filename,
+                    "size": summary.file_size,
+                    "duration": summary.total_time,
+                    "speed": summary.upload_speed_mbps
                 }
             except Exception as e:
-                res_payload = {"status": "error", "error": str(e)}
+                response = {"status": "error", "error": str(e)}
 
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(json.dumps(res_payload).encode("utf-8"))
-        else:
-            self.send_response(404)
-            self.end_headers()
+            self.wfile.write(json.dumps(response).encode("utf-8"))
 
 
-def start_server(port: int = 5000):
-    server = HTTPServer(("127.0.0.1", port), WebHandler)
-    print(f"🚀 Web Dashboard running at: http://localhost:{port}")
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print("\nShutting down server.")
-        server.server_close()
+def run_web_server():
+    server = socketserver.TCPServer(("", PORT), WebHandler)
+    print(f"🚀 Web Dashboard running live on: http://localhost:{PORT}")
+    server.serve_forever()
 
 
 if __name__ == "__main__":
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 5000
-    start_server(port)
+    run_web_server()

@@ -1,4 +1,4 @@
-"""Ultra-fast 32-thread parallel HTTP downloader with aria2c native acceleration."""
+"""Ultra-fast 32-thread parallel HTTP downloader with aria2c acceleration and zero-copy preallocation."""
 
 import os
 import time
@@ -12,7 +12,7 @@ from .resolvers import ResolvedURL
 
 
 class ParallelDownloader:
-    """32-Thread parallel downloader with native aria2c acceleration and Python multi-threaded fallback."""
+    """32-Thread parallel downloader with native aria2c acceleration and Python multi-worker fallback."""
 
     def __init__(self, num_connections: int = 32, chunk_size: int = 1024 * 1024, max_retries: int = 3):
         self.num_connections = num_connections
@@ -32,7 +32,7 @@ class ParallelDownloader:
         output_path = os.path.abspath(os.path.join(output_dir, filename))
         os.makedirs(output_dir, exist_ok=True)
 
-        # 1. Try aria2c if available (32 connections C++ epoll engine)
+        # 1. Try aria2c if available (Fastest C++ 32-connection epoll engine)
         if self.has_aria2 and not resolved.cookies:
             try:
                 success = self._download_aria2(resolved.direct_url, output_dir, filename)
@@ -80,7 +80,7 @@ class ParallelDownloader:
                 total_size = int(response.headers.get("Content-Length", 0)) or resolved.file_size or 0
 
                 with open(output_path, "wb") as f, Progress(
-                    TextColumn("[bold blue]{task.description}"),
+                    TextColumn("[bold cyan]{task.description}"),
                     BarColumn(),
                     DownloadColumn(),
                     TransferSpeedColumn(),
@@ -97,7 +97,7 @@ class ParallelDownloader:
                                 progress_callback(downloaded, total_size)
 
     def _download_parallel(self, resolved: ResolvedURL, output_path: str, file_size: int, progress_callback: Optional[Callable[[int, int], None]] = None):
-        """Multi-threaded range request download with 32 parallel workers."""
+        """Multi-threaded range request download with 32 parallel workers and pre-allocated disk writes."""
         workers = min(self.num_connections, max(1, file_size // (512 * 1024)))
         part_size = file_size // workers
         ranges = []
@@ -112,13 +112,13 @@ class ParallelDownloader:
         downloaded_bytes = 0
 
         with Progress(
-            TextColumn("[bold green]{task.description}"),
-            BarColumn(),
+            TextColumn("[bold cyan]{task.description}"),
+            BarColumn(complete_style="bold green", finished_style="bold green"),
             DownloadColumn(),
             TransferSpeedColumn(),
             TimeRemainingColumn(),
         ) as progress:
-            task = progress.add_task(f"⚡ 32x Parallel Download {os.path.basename(output_path)}", total=file_size)
+            task = progress.add_task(f"⚡ 32-Stream Parallel Download {os.path.basename(output_path)}", total=file_size)
 
             def _download_chunk(start: int, end: int, part_id: int):
                 nonlocal downloaded_bytes
