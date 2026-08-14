@@ -1,4 +1,4 @@
-"""SourceForge URL resolver with canonical GeoDNS director resolution."""
+"""SourceForge URL resolver with signed redirect chain extraction."""
 
 import re
 import urllib.parse
@@ -8,9 +8,7 @@ from .base import BaseResolver, ResolvedURL
 
 
 class SourceForgeResolver(BaseResolver):
-    """Resolver for SourceForge project files using canonical director redirects."""
-
-    USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+    """Resolver for SourceForge project files using signed redirect chain extraction."""
 
     def can_handle(self, url: str) -> bool:
         return "sourceforge.net" in url.lower()
@@ -18,23 +16,20 @@ class SourceForgeResolver(BaseResolver):
     def resolve(self, url: str) -> ResolvedURL:
         cleaned_url = url.strip().strip("'\"")
         
-        # Canonical director format: https://downloads.sourceforge.net/project/<PROJECT>/<FILEPATH>
-        match = re.search(r"sourceforge\.net/(?:projects/([^/]+)/files/|p/([^/]+)/.*?/download\?|project/([^/]+)/)(.+?)(?:/download)?(?:\?.*)?$", cleaned_url, re.IGNORECASE)
-        
-        headers = {"User-Agent": self.USER_AGENT}
+        # Ensure /download suffix on project file links
+        if not cleaned_url.endswith("/download") and "/files/" in cleaned_url:
+            if not cleaned_url.endswith("/"):
+                cleaned_url += "/download"
+            else:
+                cleaned_url += "download"
 
-        if match:
-            project = match.group(1) or match.group(2) or match.group(3)
-            filepath = match.group(4).rstrip("/")
-            canonical_url = f"https://downloads.sourceforge.net/project/{project}/{filepath}"
-        else:
-            canonical_url = cleaned_url if cleaned_url.endswith("/download") else f"{cleaned_url}/download"
+        headers = {"User-Agent": "Wget/1.21.3"}
 
-        # Resolve 302 redirect chain to signed mirror CDN with token
-        with httpx.Client(follow_redirects=True, timeout=30.0) as client:
-            resp = client.head(canonical_url, headers=headers)
-            if resp.status_code >= 400:
-                resp = client.get(canonical_url, headers=headers)
+        # Follow redirect chain with Wget user-agent to get direct signed mirror CDN URL
+        with httpx.Client(follow_redirects=True, timeout=45.0) as client:
+            resp = client.head(cleaned_url, headers=headers)
+            if resp.status_code >= 400 or "content-length" not in resp.headers:
+                resp = client.get(cleaned_url, headers=headers)
 
             direct_url = str(resp.url)
             file_size = int(resp.headers.get("Content-Length", 0)) or None
@@ -62,5 +57,5 @@ class SourceForgeResolver(BaseResolver):
                 file_size=file_size,
                 headers=headers,
                 supports_ranges=True,
-                mirror_urls=[direct_url, canonical_url]
+                mirror_urls=[direct_url]
             )
